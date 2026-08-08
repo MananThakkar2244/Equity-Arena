@@ -1,0 +1,250 @@
+const { PrismaClient } = require('@prisma/client');
+const { emitStockUpdate } = require('../socket');
+const config = require('../config/marketConfig');
+const { checkAndExecuteLimitOrders } = require('./orderService');
+const { checkSessionTimers } = require('./sessionService');
+const { randomNormal, combineSectorNoise, calculateGBMPrice, calculateMacroMoveTarget } = require('../utils/quantMath');
+
+const prisma = new PrismaClient();
+let tickerInterval = null;
+
+// Persistent state per stock for drift, GARCH volatility, and Phase 20b/23 15-minute jittered macro moves
+const stockStates = new Map();
+
+/**
+ * Generates a randomized next macro cycle duration in ms (12 to 18 minutes baseline)
+ * With an 8% chance for a shorter 6-9 minute follow-up cycle
+ */
+function getNextMacroIntervalMs() {
+  const isShortCycle = Math.random() < 0.08;
+  if (isShortCycle) {
+    return Math.floor(360000 + Math.random() * 180000); // 6 to 9 mins
+  }
+  return Math.floor(720000 + Math.random() * 360000); // 12 to 18 mins
+}
+
+/**
+ * Gets or initializes the quant parameter state for a stock
+ */
+function getStockState(stockId) {
+  if (!stockStates.has(stockId)) {
+    const baseDrift = (Math.random() - 0.5) * 0.03;
+    const baseVol = 0.10 + Math.random() * 0.10;
+    const offsetMs = Math.floor(Math.random() * 900000);
+
+    stockStates.set(stockId, {
+      targetDrift: baseDrift,
+      currentDrift: baseDrift,
+      baseVolatility: baseVol,
+      volatility: baseVol,
+      newsDriftBonus: 0,
+      newsVolBonus: 0,
+      lastReturn: 0,
+      lastMacroTime: Date.now() - offsetMs,
+      nextMacroIntervalMs: getNextMacroIntervalMs(),
+      pendingMacroSteer: null,
+      macroRampActive: false,
+      macroRampStep: 0,
+      macroTotalRampSteps: 5,
+      macroStepIncrement: 0
+    });
+  }
+  return stockStates.get(stockId);
+}
+
+/**
+ * Phase 23: Steers upcoming macro moves for target stocks based on news broadcast effects
+ * @param {Array<{sector?: string, symbol?: string, effectPercent: number}>} stockEffects
+ * @param {number} delaySeconds
+ */
+async function steerMacroMoveForNews(stockEffects, delaySeconds = 30) {
+  try {
+    const stocks = await prisma.stock.findMany();
+    const now = Date.now();
+
+    for (const effect of stockEffects) {
+      const { sector, symbol, effectPercent } = effect;
+      const matchingStocks = stocks.filter((s) => 
+        (sector && s.sector.toLowerCase().trim() === sector.toLowerCase().trim()) ||
+        (symbol && s.symbol.toLowerCase().trim() === symbol.toLowerCase().trim())
+      );
+
+      for (const stock of matchingStocks) {
+        const state = getStockState(stock.id);
+        const targetPrice = Math.min(99.00, Math.max(1.00, Math.round(stock.currentPrice * (1 + effectPercent / 100) * 100) / 100));
+
+        state.pendingMacroSteer = {
+          targetPrice,
+          effectPercent
+        };
+
+        // Accelerate next macro move to trigger in delaySeconds
+        state.lastMacroTime = now - state.nextMacroIntervalMs + (delaySeconds * 1000);
+      }
+    }
+  } catch (err) {
+    console.error('Error steering macro move for news:', err);
+  }
+}
+
+/**
+ * Perform a single background tick using Dual-Layer Quant Market Engine:
+ * Layer 1: Continuous 1-2% GBM noise + Volatility Clustering + Sector Correlation
+ * Layer 2: Independent 15-Minute Jittered Macro Volatility Swings (Capped at 99 IC)
+ */
+async function tickMarket() {
+  if (!config.TICKER_ENABLED) return;
+
+  try {
+    await checkSessionTimers();
+    const stocks = await prisma.stock.findMany();
+    if (!stocks || stocks.length === 0) return;
+
+    const now = Date.now();
+
+    // 1. Generate shared sector normal noise
+    const uniqueSectors = [...new Set(stocks.map((s) => s.sector))];
+    const sectorNoises = {};
+    uniqueSectors.forEach((sector) => {
+      sectorNoises[sector] = randomNormal(0, 1);
+    });
+
+    for (const stock of stocks) {
+      const state = getStockState(stock.id);
+
+      // Phase 20b/23 Macro Move Trigger Check
+      const timeSinceLastMacro = now - state.lastMacroTime;
+      if (timeSinceLastMacro >= state.nextMacroIntervalMs && !state.macroRampActive) {
+        state.lastMacroTime = now;
+        state.nextMacroIntervalMs = getNextMacroIntervalMs();
+
+        let targetPrice;
+        if (state.pendingMacroSteer) {
+          targetPrice = state.pendingMacroSteer.targetPrice;
+          state.pendingMacroSteer = null; // Consume news steer
+        } else {
+          const isSkippedCycle = Math.random() < 0.12;
+          if (!isSkippedCycle) {
+            const macroMove = calculateMacroMoveTarget({
+              currentPrice: stock.currentPrice,
+              basePrice: stock.basePrice
+            });
+            targetPrice = macroMove.targetPrice;
+          }
+        }
+
+        if (targetPrice !== undefined && targetPrice !== stock.currentPrice) {
+          state.macroRampActive = true;
+          state.macroRampStep = 0;
+          state.macroTotalRampSteps = 5;
+          const totalDelta = targetPrice - stock.currentPrice;
+          state.macroStepIncrement = totalDelta / state.macroTotalRampSteps;
+        }
+      }
+
+      // 2. Layer 1: Continuous GBM Noise calculation
+      const stockNoise = randomNormal(0, 1);
+      const sectorNoise = sectorNoises[stock.sector] || randomNormal(0, 1);
+      const combinedNoise = combineSectorNoise(stockNoise, sectorNoise, 0.50);
+
+      const priceDeviation = stock.basePrice > 0
+        ? (stock.currentPrice - stock.basePrice) / stock.basePrice
+        : 0;
+      const meanReversionPull = -0.08 * priceDeviation;
+      const effectiveDrift = state.targetDrift + state.newsDriftBonus + meanReversionPull;
+
+      const absLastReturn = Math.abs(state.lastReturn);
+      if (absLastReturn > 0.02) {
+        state.volatility = Math.min(0.40, state.volatility + absLastReturn * 0.20);
+      } else {
+        const targetVol = state.baseVolatility + state.newsVolBonus;
+        state.volatility = state.volatility * 0.90 + targetVol * 0.10;
+      }
+
+      const dt = 0.008;
+      let rawPrice = calculateGBMPrice({
+        currentPrice: stock.currentPrice,
+        drift: effectiveDrift,
+        volatility: state.volatility,
+        dt,
+        combinedNoise
+      });
+
+      // 3. Layer 2: Apply smooth macro ramp increment if active
+      if (state.macroRampActive) {
+        rawPrice += state.macroStepIncrement;
+        state.macroRampStep += 1;
+        if (state.macroRampStep >= state.macroTotalRampSteps) {
+          state.macroRampActive = false;
+        }
+      }
+
+      // Hard ceiling clamp at 99.00 IC max and floor at 1.00 IC
+      const newPrice = Math.min(99.00, Math.max(1.00, Math.round(rawPrice * 100) / 100));
+
+      if (newPrice === stock.currentPrice) continue;
+
+      state.lastReturn = (newPrice - stock.currentPrice) / stock.currentPrice;
+
+      const baseVol = Math.floor(5000 + Math.abs(state.lastReturn) * 120000 + state.volatility * 20000);
+      const tickVolume = Math.min(120000, Math.max(3000, baseVol));
+
+      // Update Database
+      const [updatedStock, newHistory] = await prisma.$transaction([
+        prisma.stock.update({
+          where: { id: stock.id },
+          data: { currentPrice: newPrice }
+        }),
+        prisma.priceHistory.create({
+          data: {
+            stockId: stock.id,
+            price: newPrice,
+            volume: tickVolume
+          }
+        })
+      ]);
+
+      const percentChange = stock.basePrice > 0
+        ? Math.round((((newPrice - stock.basePrice) / stock.basePrice) * 100) * 100) / 100
+        : 0;
+
+      // Broadcast live update
+      emitStockUpdate({
+        stockId: updatedStock.id,
+        symbol: updatedStock.symbol,
+        name: updatedStock.name,
+        newPrice: updatedStock.currentPrice,
+        volume: newHistory.volume,
+        percentChange,
+        timestamp: newHistory.timestamp
+      });
+
+      // Hook: Check and execute limit orders
+      await checkAndExecuteLimitOrders(stock.id, newPrice);
+    }
+  } catch (err) {
+    console.error('Market ticker error:', err.message);
+  }
+}
+
+function startMarketTicker() {
+  if (tickerInterval) return;
+  console.log(`📈 Dual-Layer Quant Market Ticker started (Continuous GBM + 15-Min Jittered Macro Swings [40-80 IC, Max 99 IC])`);
+  tickerInterval = setInterval(tickMarket, config.TICKER_INTERVAL_MS || config.TICK_INTERVAL_MS);
+}
+
+function stopMarketTicker() {
+  if (tickerInterval) {
+    clearInterval(tickerInterval);
+    tickerInterval = null;
+    console.log('🛑 Background Market Ticker stopped');
+  }
+}
+
+module.exports = {
+  startMarketTicker,
+  stopMarketTicker,
+  tickMarket,
+  steerMacroMoveForNews,
+  getStockState
+};
