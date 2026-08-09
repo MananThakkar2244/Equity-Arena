@@ -8,16 +8,21 @@ export function SessionCountdown({ onSessionUpdate }) {
   const [session, setSession] = useState(null);
   const [remainingSeconds, setRemainingSeconds] = useState(0);
 
+  const onSessionUpdateRef = React.useRef(onSessionUpdate);
+  useEffect(() => {
+    onSessionUpdateRef.current = onSessionUpdate;
+  }, [onSessionUpdate]);
+
   const fetchSession = useCallback(async () => {
     try {
       const data = await apiFetch('/session');
       setSession(data);
-      setRemainingSeconds(data.remainingSeconds);
-      if (onSessionUpdate) onSessionUpdate(data);
+      setRemainingSeconds(data.remainingSeconds || 0);
+      if (onSessionUpdateRef.current) onSessionUpdateRef.current(data);
     } catch (err) {
       console.error('Failed to fetch session countdown:', err);
     }
-  }, [onSessionUpdate]);
+  }, []);
 
   useEffect(() => {
     fetchSession();
@@ -27,9 +32,9 @@ export function SessionCountdown({ onSessionUpdate }) {
     return () => clearInterval(syncInterval);
   }, [fetchSession]);
 
-  // Client-side 1-second countdown tick
+  // Client-side 1-second countdown tick (decoupled from remainingSeconds to tick smoothly every 1000ms)
   useEffect(() => {
-    if (remainingSeconds <= 0) return;
+    if (!session || session.status === 'ENDED') return;
 
     const timer = setInterval(() => {
       setRemainingSeconds((prev) => {
@@ -42,22 +47,41 @@ export function SessionCountdown({ onSessionUpdate }) {
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [remainingSeconds, fetchSession]);
+  }, [session?.id, session?.status, fetchSession]);
 
   // Listen to WebSocket session events
   useEffect(() => {
     if (!socket) return;
 
-    const handleSessionUpdate = () => fetchSession();
-    const handleSessionLiquidated = () => fetchSession();
-    const handleSessionEnded = () => fetchSession();
+    const handleSessionStarted = (data) => {
+      if (data) {
+        setSession((prev) => ({ ...prev, ...data }));
+        if (data.remainingSeconds !== undefined) {
+          setRemainingSeconds(data.remainingSeconds);
+        }
+      }
+      fetchSession();
+    };
 
-    socket.on('session:started', handleSessionUpdate);
+    const handleSessionLiquidated = (data) => {
+      if (data && data.remainingSeconds !== undefined) {
+        setRemainingSeconds(data.remainingSeconds);
+      }
+      fetchSession();
+    };
+
+    const handleSessionEnded = (data) => {
+      setRemainingSeconds(0);
+      setSession((prev) => (prev ? { ...prev, status: 'ENDED' } : null));
+      fetchSession();
+    };
+
+    socket.on('session:started', handleSessionStarted);
     socket.on('session:liquidated', handleSessionLiquidated);
     socket.on('session:ended', handleSessionEnded);
 
     return () => {
-      socket.off('session:started', handleSessionUpdate);
+      socket.off('session:started', handleSessionStarted);
       socket.off('session:liquidated', handleSessionLiquidated);
       socket.off('session:ended', handleSessionEnded);
     };

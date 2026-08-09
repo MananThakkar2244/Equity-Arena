@@ -6,6 +6,7 @@ const { emitPortfolioUpdate } = require('../socket');
 const { getUserAvailableBalance, getUserAvailableHolding } = require('../services/orderService');
 const { getCurrentSession } = require('../services/sessionService');
 const { getUserPortfolio } = require('../services/portfolioService');
+const { getPortfolioHistory, RANGES } = require('../services/portfolioHistoryService');
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -20,6 +21,25 @@ router.get('/portfolio', authenticateToken, async (req, res) => {
     return res.json(portfolio);
   } catch (err) {
     console.error('Get portfolio error:', err);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// GET /portfolio/history?range=15m|1h|3h
+router.get('/portfolio/history', authenticateToken, async (req, res) => {
+  try {
+    const range = String(req.query.range || '3h');
+    if (!RANGES[range]) {
+      return res.status(400).json({ error: `Invalid range. Use one of: ${Object.keys(RANGES).join(', ')}` });
+    }
+
+    const history = await getPortfolioHistory(req.user.userId, range);
+    if (!history) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    return res.json(history);
+  } catch (err) {
+    console.error('Get portfolio history error:', err);
     return res.status(500).json({ error: 'Internal server error' });
   }
 });

@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, ArrowDownRight, ArrowUpRight } from 'lucide-react';
-import { Bull360 } from './dashboard/Bull360';
+import { Bull3D } from './Bull3D';
 
 const HOLD_MS = { success: 4200, error: 2600 };
 
@@ -216,7 +216,7 @@ export function BullCelebration({ result, onClose }) {
 
                 <div className="relative flex h-full items-end justify-center gap-6 pb-4">
                   <div className="animate-bull-charge">
-                    <Bull360 width={244} height={196} autoSpin showDegrees={false} showHint={false} />
+                    <Bull3D width={244} height={196} autoSpin showDegrees={false} showHint={false} />
                   </div>
                   <div className="mb-12 shrink-0">
                     <CrystalCandle positive={!isSell} />

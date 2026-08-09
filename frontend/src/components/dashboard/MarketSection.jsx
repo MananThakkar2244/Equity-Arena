@@ -3,7 +3,7 @@ import { Activity, ArrowRight, ChevronDown, Coins, LayoutGrid, List, Newspaper, 
 import { StatTile } from './StatTile';
 import { TradingChart } from './TradingChart';
 import { SECTOR_TINT } from './sectorTheme';
-import { Bull360 } from './Bull360';
+import { MarketStateHero } from './MarketStateHero';
 import { apiFetch } from '../../services/api';
 
 // Windows are time-based; /stocks/:id/history carries the full session depth.
@@ -21,12 +21,6 @@ const CARD_WINDOWS = [
   { id: 'M15', label: '15M', minutes: 15 },
   { id: 'H1', label: '1H', minutes: 60 },
   { id: 'DAY', label: '1D', minutes: Infinity }
-];
-
-const TABS = [
-  { id: 'ALL', label: 'All Stocks' },
-  { id: 'GAINERS', label: 'Top Gainers' },
-  { id: 'LOSERS', label: 'Top Losers' }
 ];
 
 const MAX_POINTS = 2400;
@@ -405,7 +399,6 @@ export function MarketSection({
   const [sessionBySymbol, setSessionBySymbol] = useState({});
   const [focusHistory, setFocusHistory] = useState([]);
 
-  const [tab, setTab] = useState('ALL');
   const [cardWindow, setCardWindow] = useState('DAY');
   const [view, setView] = useState('grid');
   const [expanded, setExpanded] = useState(false);
@@ -569,8 +562,6 @@ export function MarketSection({
    * say, so every card stays large.
    */
   const groups = useMemo(() => {
-    if (tab === 'GAINERS') return { hero: [gainers].filter((g) => g.length), compact: [] };
-    if (tab === 'LOSERS') return { hero: [losers].filter((g) => g.length), compact: [] };
     if (filtered.length <= HERO_COUNT * 2) return { hero: [filtered], compact: [] };
 
     const topUp = gainers.slice(0, HERO_COUNT);
@@ -581,7 +572,7 @@ export function MarketSection({
       .sort((a, b) => a.symbol.localeCompare(b.symbol));
 
     return { hero: [topUp, topDown].filter((g) => g.length), compact: rest };
-  }, [tab, filtered, gainers, losers]);
+  }, [filtered, gainers, losers]);
 
   const compactShown = expanded ? groups.compact : groups.compact.slice(0, COMPACT_CAP);
   const overflow = groups.compact.length - compactShown.length;
@@ -618,11 +609,11 @@ export function MarketSection({
         className="arena-rise relative overflow-hidden rounded-[var(--arena-radius)] border theme-border"
         style={{
           background:
-            'linear-gradient(105deg, var(--bg-card) 0%, var(--bg-card) 46%, color-mix(in srgb, var(--accent) 16%, var(--bg-card)) 100%)'
+            'linear-gradient(180deg, color-mix(in srgb, var(--accent) 4%, var(--bg-card)) 0%, var(--bg-card) 100%)'
         }}
       >
-        <div className="flex items-center justify-between gap-4 px-6 py-5">
-          <div className="min-w-0">
+        <div className="flex flex-col gap-5 px-6 py-5 lg:flex-row lg:items-center lg:justify-between">
+          <div className="min-w-0 lg:w-[25%] lg:shrink-0">
             <div className="inline-flex items-center gap-1.5 rounded-full border border-[var(--accent-ring)] bg-[var(--accent-soft)] px-2.5 py-1 font-mono text-[10px] font-bold uppercase tracking-wider text-[var(--accent)]">
               <span className="arena-pulse h-1.5 w-1.5 rounded-full bg-[var(--accent)]" />
               Live exchange
@@ -634,9 +625,24 @@ export function MarketSection({
               Fifteen listings across fifteen sectors, priced tick by tick. News breaks, prices move — read it
               first and the board is yours.
             </p>
+
+            {/* Driven by the same `locked` flag the trade buttons use, so the
+                badge can never claim the floor is open while it is not. */}
+            <div className="mt-3 inline-flex items-center gap-1.5 font-mono text-[10.5px] font-bold uppercase tracking-[0.14em]"
+                 style={{ color: locked ? 'var(--loss-red)' : 'var(--gain-green)' }}>
+              <span
+                className={`h-1.5 w-1.5 rounded-full ${locked ? '' : 'arena-pulse'}`}
+                style={{ backgroundColor: locked ? 'var(--loss-red)' : 'var(--gain-green)' }}
+              />
+              {locked ? 'Market is closed' : 'Market is open'}
+            </div>
           </div>
 
-          <Bull360 className="hidden shrink-0 md:block" width={280} height={200} />
+          <MarketStateHero
+            stocks={stocks}
+            index={index}
+            className="hidden h-[212px] min-w-0 flex-1 lg:flex"
+          />
         </div>
       </div>
 
@@ -782,7 +788,7 @@ export function MarketSection({
       </div>
 
       {/* ---- The board ---- */}
-      <div>
+      <div id="arena-floor" className="scroll-mt-24">
         <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
           <div>
             <h2 className="font-heading text-[17px] font-bold theme-text-main">
@@ -800,20 +806,6 @@ export function MarketSection({
                 Trading locked
               </span>
             )}
-
-            <div className="mkt-seg">
-              {TABS.map((t) => (
-                <button
-                  key={t.id}
-                  type="button"
-                  onClick={() => setTab(t.id)}
-                  aria-pressed={tab === t.id}
-                  className={tab === t.id ? 'is-on' : ''}
-                >
-                  {t.label}
-                </button>
-              ))}
-            </div>
 
             <div className="mkt-select">
               <select

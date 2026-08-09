@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Lock } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useSocket } from '../context/SocketContext';
 import { apiFetch } from '../services/api';
@@ -275,7 +276,9 @@ export function TraderDashboard() {
     return map;
   }, [livePortfolio.holdings]);
 
-  const locked = session?.status === 'ENDED' || session?.isTradingLocked === true;
+  // Trading is open only while a session is actively running — NOT_STARTED and
+  // LIQUIDATING have to lock the desk too, not just ENDED.
+  const locked = !session || session.status !== 'ACTIVE' || session.isTradingLocked === true;
 
   const badges = useMemo(
     () => ({
@@ -366,6 +369,9 @@ export function TraderDashboard() {
         <TickerTape stocks={stocks} onSelect={handleTrade} />
 
         <main className="mx-auto w-full max-w-[1400px] px-4 pb-24 pt-5 sm:px-6 lg:pb-10">
+          {/* Portfolio renders its own header + range control, so the generic
+              section heading would just repeat the word "Portfolio". */}
+          {section !== 'PORTFOLIO' && (
           <div className="mb-4">
             <h1 className="font-heading text-[22px] font-bold tracking-tight theme-text-main">
               {section === 'MARKET' ? `Welcome back, ${(user?.name || 'trader').split(' ')[0]}` : currentSection?.label}
@@ -377,6 +383,25 @@ export function TraderDashboard() {
               {section === 'NEWS' && 'The desk moves prices. Read it first.'}
             </p>
           </div>
+          )}
+
+          {locked && (
+            <div className="mb-4 flex items-center justify-between gap-3 rounded-xl border border-[#F59E0B]/35 bg-[#F59E0B]/10 px-4 py-3">
+              <div className="flex items-center gap-2.5">
+                <Lock className="h-4 w-4 shrink-0 text-[#F59E0B]" />
+                <span className="text-[12.5px] font-semibold text-[#F59E0B]">
+                  {!session || session.status === 'NOT_STARTED'
+                    ? 'Trading is locked — waiting for the admin to start the session.'
+                    : session.status === 'LIQUIDATING'
+                    ? 'Auto-liquidation sweep active — positions are converting to cash.'
+                    : 'Trading session ended — final results are locked.'}
+                </span>
+              </div>
+              <span className="shrink-0 rounded-lg bg-[#F59E0B]/20 px-2.5 py-1 font-mono text-[10.5px] font-bold uppercase tracking-wider text-[#F59E0B]">
+                {session?.status || 'Locked'}
+              </span>
+            </div>
+          )}
 
           <div key={section} className="arena-fade">
             {section === 'MARKET' && (
@@ -425,6 +450,7 @@ export function TraderDashboard() {
         isOpen={isDetailOpen}
         onClose={() => setIsDetailOpen(false)}
         onSuccess={handleTradeSuccess}
+        isTradingLocked={locked}
       />
 
       <BullCelebration result={celebration} onClose={() => setCelebration(null)} />

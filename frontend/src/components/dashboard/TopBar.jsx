@@ -31,11 +31,22 @@ export function TopBar({
   const { user, logout } = useAuth();
   const { theme, toggleTheme } = useTheme();
 
-  const locked = sessionStatus === 'ENDED';
+  // Anything other than a live ACTIVE session is a closed desk — NOT_STARTED and
+  // LIQUIDATING must not read as "Market open".
+  const locked = sessionStatus !== 'ACTIVE';
   const critical = !locked && remainingSeconds <= 300;
   const warning = !locked && !critical && remainingSeconds <= 1800;
 
-  const stateLabel = locked ? 'Market closed' : critical ? 'Liquidating' : 'Market open';
+  const stateLabel =
+    sessionStatus === 'LIQUIDATING'
+      ? 'Liquidating'
+      : locked
+      ? sessionStatus === 'NOT_STARTED' || !sessionStatus
+        ? 'Market pre-open'
+        : 'Market closed'
+      : critical
+      ? 'Liquidating'
+      : 'Market open';
   const dotColour = locked || critical ? 'var(--loss-red)' : warning ? '#F59E0B' : 'var(--gain-green)';
 
   return (

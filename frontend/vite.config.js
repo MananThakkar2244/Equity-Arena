@@ -12,16 +12,26 @@ export default defineConfig({
       // page route and hands it to Express, which 404s on refresh.
       '^/trade/': 'http://localhost:5001',
       '/portfolio': 'http://localhost:5001',
+      '/orders': 'http://localhost:5001',
       '/admin': 'http://localhost:5001',
       // Without these the calls fall through to Vite's SPA fallback and come
       // back as HTML — which is why the session clock read NaN and the news
       // feed was always empty.
       '/session': 'http://localhost:5001',
       '/news': 'http://localhost:5001',
-      '/orders': 'http://localhost:5001',
+      '/api': 'http://localhost:5001',
       '/socket.io': {
         target: 'http://localhost:5001',
-        ws: true
+        ws: true,
+        configure: (proxy) => {
+          proxy.on('error', (err, _req, _res) => {
+            // Quietly swallow dev-server WS pipe disconnect errors during backend reloads
+            if (err.code === 'EPIPE' || err.code === 'ECONNRESET' || err.code === 'ECONNREFUSED') {
+              return;
+            }
+            console.warn('[Vite WS Proxy Error]:', err.message);
+          });
+        }
       }
     }
   }
