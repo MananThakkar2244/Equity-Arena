@@ -122,8 +122,9 @@ export function Login() {
         </div>
       </div>
 
-      <div className="w-full max-w-md my-auto">
-        <div className="text-center mb-8">
+      <div className="w-full max-w-md my-auto relative">
+
+        <div className="text-center mb-8 relative z-10">
           {/* Logo mark — identical gold gradient + TrendingUp glyph used in the dashboard Sidebar.
               Doubles as the hidden 5-click admin trigger. */}
           <button
@@ -146,8 +147,9 @@ export function Login() {
           </p>
         </div>
 
+        <div className="login-glow-border relative p-[2px] rounded-2xl">
         <div
-          className="p-8 rounded-2xl border theme-border transition-colors"
+          className="relative z-[1] p-8 rounded-[14px] border theme-border transition-colors"
           style={{ backgroundColor: 'var(--bg-card)', boxShadow: 'var(--card-shadow)' }}
         >
           <div
@@ -316,6 +318,7 @@ export function Login() {
               </button>
             </form>
           )}
+        </div>
         </div>
       </div>
     </div>
