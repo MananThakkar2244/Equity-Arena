@@ -7,7 +7,16 @@ require('dotenv').config();
 
 const { initSocket } = require('./socket');
 const { startMarketTicker } = require('./services/marketTicker');
-const { ensureDatabase } = require('./db/ensureDatabase');
+const { ensureNewsTemplatesSeeded } = require('./services/newsService');
+
+// Top-level process safety nets to prevent backend crashes on stray errors
+process.on('uncaughtException', (err) => {
+  console.error('[CRITICAL UNCAUGHT EXCEPTION]:', err?.stack || err?.message || err);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[CRITICAL UNHANDLED REJECTION]:', reason);
+});
 
 const authRoutes = require('./routes/authRoutes');
 const stockRoutes = require('./routes/stockRoutes');
@@ -41,12 +50,19 @@ app.use(express.json());
 // Socket.io initialization
 initSocket(server);
 
+// Start continuous background market drift ticker
+startMarketTicker();
+
+// Ensure analyst news templates are populated
+ensureNewsTemplatesSeeded();
+
 // API Routes
 app.use('/auth', authRoutes);
 app.use('/stocks', stockRoutes);
 app.use('/admin', adminRoutes);
 app.use('/', tradeRoutes); // Mounts GET /portfolio, POST /trade/buy, POST /trade/sell
 app.use('/', orderRoutes); // Mounts POST /orders, DELETE /orders/:id, GET /orders
+app.use('/api', orderRoutes); // Dual mount for /api/orders prefix compatibility
 app.use('/', stockRoutes); // Mounts GET /news
 app.use('/', sessionRoutes); // Mounts GET /api/session, POST /api/admin/session/start
 
@@ -68,28 +84,10 @@ if (fs.existsSync(distPath)) {
 
 const PORT = process.env.PORT || 5001;
 
-/**
- * The ticker writes on every beat, so the database has to be up before it
- * starts — otherwise the log fills with connection errors while the server
- * claims to be running.
- */
-async function boot() {
-  try {
-    await ensureDatabase();
-  } catch (err) {
-    console.error('❌ Could not prepare the database:', err.message);
-    process.exit(1);
-  }
-
-  startMarketTicker();
-
+if (require.main === module) {
   server.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
   });
-}
-
-if (require.main === module) {
-  boot();
 }
 
 module.exports = { app, server };

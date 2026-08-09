@@ -14,29 +14,25 @@ async function getCurrentSession() {
     orderBy: { createdAt: 'desc' }
   });
 
+  // If no active or liquidating session exists, return NOT_STARTED
   if (!session) {
-    session = await prisma.session.findFirst({
-      orderBy: { createdAt: 'desc' }
-    });
-  }
-
-  // If no session exists in DB at all, auto-initialize a default 3-hour session
-  if (!session) {
-    const now = new Date();
-    const endTime = new Date(now.getTime() + 3 * 3600 * 1000);
-    session = await prisma.session.create({
-      data: {
-        startTime: now,
-        endTime: endTime,
-        status: 'ACTIVE'
-      }
-    });
+    return {
+      id: null,
+      status: 'NOT_STARTED',
+      remainingSeconds: 0,
+      durationMinutes: 180,
+      liquidationBufferMinutes: 5,
+      macroCycleIntervalMinutes: 15,
+      isLiquidated: false,
+      isTradingLocked: true
+    };
   }
 
   const now = new Date();
   const remainingSeconds = Math.max(0, Math.floor((session.endTime.getTime() - now.getTime()) / 1000));
+  const liquidationBufferSeconds = (session.liquidationBufferMinutes || 5) * 60;
   const isLiquidated = session.status === 'LIQUIDATING' || session.status === 'ENDED';
-  const isTradingLocked = session.status === 'ENDED' || (remainingSeconds <= 300 && session.status === 'LIQUIDATING');
+  const isTradingLocked = session.status !== 'ACTIVE' || remainingSeconds <= liquidationBufferSeconds;
 
   return {
     ...session,
@@ -50,7 +46,7 @@ function safeEmitSocket(eventName, data) {
   try {
     const io = getIo();
     if (io) {
-      io.to('traders').emit(eventName, data);
+      io.emit(eventName, data);
     }
   } catch (err) {
     // Silent fallback when running outside socket server context
@@ -72,12 +68,24 @@ function resetUsedTemplates() {
 }
 
 /**
- * Starts a new 3-hour session (Admin Action)
+ * Starts a new session with admin-configured parameters (Admin Action)
  * Prevents overlapping sessions by ending any active/liquidating sessions first.
  */
-async function startNewSession(durationHours = 3) {
+async function startNewSession(options = {}) {
+  let durationMins = 180;
+  let bufferMins = 5;
+  let macroMins = 15;
+
+  if (typeof options === 'object' && options !== null) {
+    if (options.durationMinutes !== undefined) durationMins = parseInt(options.durationMinutes, 10) || 180;
+    if (options.liquidationBufferMinutes !== undefined) bufferMins = parseInt(options.liquidationBufferMinutes, 10) || 5;
+    if (options.macroCycleIntervalMinutes !== undefined) macroMins = parseInt(options.macroCycleIntervalMinutes, 10) || 15;
+  } else if (typeof options === 'number') {
+    durationMins = options * 60;
+  }
+
   const now = new Date();
-  const endTime = new Date(now.getTime() + durationHours * 3600 * 1000);
+  const endTime = new Date(now.getTime() + durationMins * 60 * 1000);
 
   // Clear used news template tracking for the fresh session
   resetUsedTemplates();
@@ -95,16 +103,32 @@ async function startNewSession(durationHours = 3) {
     data: {
       startTime: now,
       endTime: endTime,
+      durationMinutes: durationMins,
+      liquidationBufferMinutes: bufferMins,
+      macroCycleIntervalMinutes: macroMins,
       status: 'ACTIVE'
     }
   });
 
   const remainingSeconds = Math.floor((endTime.getTime() - now.getTime()) / 1000);
 
+  // Dynamically update market ticker macro cycle base interval
+  try {
+    const { setBaseMacroIntervalMinutes } = require('./marketTicker');
+    if (typeof setBaseMacroIntervalMinutes === 'function') {
+      setBaseMacroIntervalMinutes(macroMins);
+    }
+  } catch (err) {
+    // Ignore fallback
+  }
+
   safeEmitSocket('session:started', {
     sessionId: newSession.id,
     startTime: newSession.startTime,
     endTime: newSession.endTime,
+    durationMinutes: durationMins,
+    liquidationBufferMinutes: bufferMins,
+    macroCycleIntervalMinutes: macroMins,
     status: 'ACTIVE',
     remainingSeconds
   });
@@ -203,6 +227,14 @@ async function triggerAutoLiquidation() {
       ]);
 
       console.log(`✅ Liquidated ${userHoldings.length} positions for trader ${userId} (+${totalProceeds.toFixed(2)} IC cash)`);
+      try {
+        const { getUserPortfolio } = require('./portfolioService');
+        const { emitPortfolioUpdate } = require('../socket');
+        const pData = await getUserPortfolio(userId);
+        if (pData) emitPortfolioUpdate(userId, pData);
+      } catch (e) {
+        // Safe guard
+      }
     }
   }
 
@@ -217,19 +249,24 @@ async function triggerAutoLiquidation() {
  */
 async function checkSessionTimers() {
   const session = await getCurrentSession();
-  const remainingSeconds = session.remainingSeconds;
+  if (session.status === 'NOT_STARTED') return session;
 
-  // Auto-Liquidation Trigger: 5 minutes left (300 seconds) and status is ACTIVE
-  if (remainingSeconds <= 300 && session.status === 'ACTIVE') {
+  const remainingSeconds = session.remainingSeconds;
+  const liquidationBufferSeconds = (session.liquidationBufferMinutes || 5) * 60;
+
+  // Auto-Liquidation Trigger: when remainingSeconds <= liquidationBufferSeconds and status is ACTIVE
+  if (remainingSeconds <= liquidationBufferSeconds && session.status === 'ACTIVE') {
     await triggerAutoLiquidation();
   }
 
   // Session End Trigger: 0 seconds left and status is not ENDED
   if (remainingSeconds <= 0 && session.status !== 'ENDED') {
-    await prisma.session.update({
-      where: { id: session.id },
-      data: { status: 'ENDED' }
-    });
+    if (session.id) {
+      await prisma.session.update({
+        where: { id: session.id },
+        data: { status: 'ENDED' }
+      });
+    }
 
     console.log('🏁 SESSION ENDED: Trading is completely locked.');
 

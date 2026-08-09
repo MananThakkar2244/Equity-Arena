@@ -28,11 +28,11 @@ async function getUserAvailableBalance(userId) {
     }
   });
 
-  const lockedFunds = pendingBuyOrders.reduce((sum, order) => {
+  const lockedFunds = Math.round(pendingBuyOrders.reduce((sum, order) => {
     return sum + (order.targetPrice * order.quantity);
-  }, 0);
+  }, 0) * 100) / 100;
 
-  const availableBalance = Math.max(0, user.walletBalance - lockedFunds);
+  const availableBalance = Math.max(0, Math.round((user.walletBalance - lockedFunds) * 100) / 100);
 
   return {
     walletBalance: user.walletBalance,
@@ -255,17 +255,12 @@ async function checkAndExecuteLimitOrders(stockId, currentPrice) {
         }
       });
 
-      // Emit refreshed portfolio data for the order owner
+      // Emit full refreshed portfolio data for the order owner
       try {
-        const fullUser = await prisma.user.findUnique({
-          where: { id: order.userId },
-          include: { holdings: { include: { stock: true } }, transactions: { include: { stock: true } } }
-        });
-        if (fullUser) {
-          emitPortfolioUpdate(order.userId, {
-            walletBalance: fullUser.walletBalance,
-            holdings: fullUser.holdings
-          });
+        const { getUserPortfolio } = require('./portfolioService');
+        const portfolio = await getUserPortfolio(order.userId);
+        if (portfolio) {
+          emitPortfolioUpdate(order.userId, portfolio);
         }
       } catch (err) {
         // Safe guard

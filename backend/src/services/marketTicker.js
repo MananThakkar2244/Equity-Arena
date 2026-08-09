@@ -11,16 +11,23 @@ let tickerInterval = null;
 // Persistent state per stock for drift, GARCH volatility, and Phase 20b/23 15-minute jittered macro moves
 const stockStates = new Map();
 
+let baseMacroIntervalMinutes = 15;
+
+function setBaseMacroIntervalMinutes(mins) {
+  if (mins && typeof mins === 'number' && mins > 0) {
+    baseMacroIntervalMinutes = mins;
+  }
+}
+
 /**
- * Generates a randomized next macro cycle duration in ms (12 to 18 minutes baseline)
- * With an 8% chance for a shorter 6-9 minute follow-up cycle
+ * Generates a randomized next macro cycle duration in ms based on baseMacroIntervalMinutes
+ * Randomizes within range [0.8 * base, 1.2 * base]
  */
 function getNextMacroIntervalMs() {
-  const isShortCycle = Math.random() < 0.08;
-  if (isShortCycle) {
-    return Math.floor(360000 + Math.random() * 180000); // 6 to 9 mins
-  }
-  return Math.floor(720000 + Math.random() * 360000); // 12 to 18 mins
+  const baseMs = baseMacroIntervalMinutes * 60 * 1000;
+  const minMs = Math.floor(baseMs * 0.8);
+  const maxMs = Math.floor(baseMs * 1.2);
+  return Math.floor(minMs + Math.random() * (maxMs - minMs));
 }
 
 /**
@@ -71,7 +78,9 @@ async function steerMacroMoveForNews(stockEffects, delaySeconds = 30) {
 
       for (const stock of matchingStocks) {
         const state = getStockState(stock.id);
-        const targetPrice = Math.min(99.00, Math.max(1.00, Math.round(stock.currentPrice * (1 + effectPercent / 100) * 100) / 100));
+        const minPrice = Math.max(1.00, Math.round((stock.basePrice || stock.currentPrice) * 0.20 * 100) / 100);
+        const maxPrice = Math.round((stock.basePrice || stock.currentPrice) * 2.50 * 100) / 100;
+        const targetPrice = Math.min(maxPrice, Math.max(minPrice, Math.round(stock.currentPrice * (1 + effectPercent / 100) * 100) / 100));
 
         state.pendingMacroSteer = {
           targetPrice,
@@ -161,13 +170,18 @@ async function tickMarket() {
         state.volatility = state.volatility * 0.90 + targetVol * 0.10;
       }
 
+      const minPrice = Math.max(1.00, Math.round((stock.basePrice || stock.currentPrice) * 0.20 * 100) / 100);
+      const maxPrice = Math.round((stock.basePrice || stock.currentPrice) * 2.50 * 100) / 100;
+
       const dt = 0.008;
       let rawPrice = calculateGBMPrice({
         currentPrice: stock.currentPrice,
         drift: effectiveDrift,
         volatility: state.volatility,
         dt,
-        combinedNoise
+        combinedNoise,
+        minPrice,
+        maxPrice
       });
 
       // 3. Layer 2: Apply smooth macro ramp increment if active
@@ -179,8 +193,7 @@ async function tickMarket() {
         }
       }
 
-      // Hard ceiling clamp at 99.00 IC max and floor at 1.00 IC
-      const newPrice = Math.min(99.00, Math.max(1.00, Math.round(rawPrice * 100) / 100));
+      const newPrice = Math.min(maxPrice, Math.max(minPrice, Math.round(rawPrice * 100) / 100));
 
       if (newPrice === stock.currentPrice) continue;
 
@@ -229,7 +242,7 @@ async function tickMarket() {
 
 function startMarketTicker() {
   if (tickerInterval) return;
-  console.log(`📈 Dual-Layer Quant Market Ticker started (Continuous GBM + 15-Min Jittered Macro Swings [40-80 IC, Max 99 IC])`);
+  console.log(`📈 Dual-Layer Quant Market Ticker started (Continuous GBM + Multi-Tier Macro Swings [Low: 30-100 IC, Mid: 100-500 IC, High: 1,000-4,000 IC])`);
   tickerInterval = setInterval(tickMarket, config.TICKER_INTERVAL_MS || config.TICK_INTERVAL_MS);
 }
 
@@ -246,5 +259,6 @@ module.exports = {
   stopMarketTicker,
   tickMarket,
   steerMacroMoveForNews,
-  getStockState
+  getStockState,
+  setBaseMacroIntervalMinutes
 };
