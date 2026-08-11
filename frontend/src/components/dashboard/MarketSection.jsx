@@ -604,47 +604,12 @@ export function MarketSection({
 
   return (
     <div className="space-y-5">
-      {/* ---- Hero ---- */}
-      <div
-        className="arena-rise relative overflow-hidden rounded-[var(--arena-radius)] border theme-border"
-        style={{
-          background:
-            'linear-gradient(180deg, color-mix(in srgb, var(--accent) 4%, var(--bg-card)) 0%, var(--bg-card) 100%)'
-        }}
-      >
-        <div className="flex flex-col gap-5 px-6 py-5 lg:flex-row lg:items-center lg:justify-between">
-          <div className="min-w-0 lg:w-[25%] lg:shrink-0">
-            <div className="inline-flex items-center gap-1.5 rounded-full border border-[var(--accent-ring)] bg-[var(--accent-soft)] px-2.5 py-1 font-mono text-[10px] font-bold uppercase tracking-wider text-[var(--accent)]">
-              <span className="arena-pulse h-1.5 w-1.5 rounded-full bg-[var(--accent)]" />
-              Live exchange
-            </div>
-            <h2 className="font-heading mt-2.5 text-[24px] font-bold leading-tight tracking-tight theme-text-main">
-              The floor is open. Take your shot.
-            </h2>
-            <p className="mt-1 max-w-[46ch] text-[13px] theme-text-muted">
-              Fifteen listings across fifteen sectors, priced tick by tick. News breaks, prices move — read it
-              first and the board is yours.
-            </p>
-
-            {/* Driven by the same `locked` flag the trade buttons use, so the
-                badge can never claim the floor is open while it is not. */}
-            <div className="mt-3 inline-flex items-center gap-1.5 font-mono text-[10.5px] font-bold uppercase tracking-[0.14em]"
-                 style={{ color: locked ? 'var(--loss-red)' : 'var(--gain-green)' }}>
-              <span
-                className={`h-1.5 w-1.5 rounded-full ${locked ? '' : 'arena-pulse'}`}
-                style={{ backgroundColor: locked ? 'var(--loss-red)' : 'var(--gain-green)' }}
-              />
-              {locked ? 'Market is closed' : 'Market is open'}
-            </div>
-          </div>
-
-          <MarketStateHero
-            stocks={stocks}
-            index={index}
-            className="hidden h-[212px] min-w-0 flex-1 lg:flex"
-          />
-        </div>
-      </div>
+      {/* ---- Market state hero ---- */}
+      <MarketStateHero
+        stocks={stocks}
+        index={index}
+        className="w-full"
+      />
 
       {/* ---- KPI row ---- */}
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">

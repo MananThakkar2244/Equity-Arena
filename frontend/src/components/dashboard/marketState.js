@@ -1,54 +1,164 @@
 /**
- * Market state maths.
+ * Market state maths
  *
- * Kept out of the component file on purpose: React Fast Refresh only works
- * when a module exports components exclusively, and mixing these helpers in
- * broke HMR for the whole hero.
+ * Breadth is the primary signal for the Arena state.
+ *
+ * The market contains a relatively small number of listings, so we use
+ * a meaningful neutral zone instead of allowing one stock to flip the
+ * entire market state.
  */
 
 /**
- * Breadth and direction, combined.
- *
- * Breadth alone calls a market bullish when fourteen listings tick up a
- * hundredth; the composite alone ignores that one heavyweight can carry it.
- * Weighting them evenly is the honest read.
+ * Read the current market.
  */
 export function readMarket(stocks, index) {
   const list = Array.isArray(stocks) ? stocks : [];
+
   const total = list.length;
 
-  const advancing = list.filter((s) => (s.percentChange || 0) > 0).length;
-  const declining = list.filter((s) => (s.percentChange || 0) < 0).length;
+  const advancing = list.filter(
+    (s) => Number(s.percentChange || 0) > 0
+  ).length;
+
+  const declining = list.filter(
+    (s) => Number(s.percentChange || 0) < 0
+  ).length;
+
   const flat = Math.max(0, total - advancing - declining);
 
-  const pct = (n) => (total > 0 ? Math.round((n / total) * 100) : 0);
-  // Largest-remainder so the three readings always total exactly 100.
-  const advPct = pct(advancing);
-  const decPct = pct(declining);
-  const flatPct = total > 0 ? Math.max(0, 100 - advPct - decPct) : 0;
+  // ------------------------------------------------------------------
+  // Guarantee that advPct + flatPct + decPct === 100
+  // ------------------------------------------------------------------
+  function computePercentages(adv, dec, flt, tot) {
+    if (tot === 0) return { advPct: 0, decPct: 0, flatPct: 0 };
 
-  const breadth = total > 0 ? (advancing - declining) / total : 0;
-  const drift = Math.max(-1, Math.min(1, (index?.change || 0) / 3));
-  const score = breadth * 0.5 + drift * 0.5;
+    const advPct = Math.round((adv / tot) * 100);
+    const decPct = Math.round((dec / tot) * 100);
+    let flatPct = Math.round((flt / tot) * 100);
 
-  // Strength is that same score on a 0-100 dial, so the needle and the label
-  // can never disagree — a gauge reading 68 while the label says BEARISH would
-  // be worse than no gauge at all.
+    const sum = advPct + decPct + flatPct;
+
+    // Adjust the largest category so the three values always total 100
+    if (sum !== 100) {
+      const diff = 100 - sum; // +1 or -1 (rarely more)
+      const values = [advPct, decPct, flatPct];
+      const maxIndex = values.indexOf(Math.max(...values));
+      values[maxIndex] += diff;
+      return {
+        advPct: values[0],
+        decPct: values[1],
+        flatPct: values[2],
+      };
+    }
+
+    return { advPct, decPct, flatPct };
+  }
+
+  const { advPct, decPct, flatPct } = computePercentages(
+    advancing,
+    declining,
+    flat,
+    total
+  );
+
+  /**
+   * Breadth ranges from:
+   *
+   * -1 = completely bearish
+   *  0 = perfectly balanced
+   * +1 = completely bullish
+   */
+  const breadth =
+    total > 0 ? (advancing - declining) / total : 0;
+
+  /**
+   * Index movement.
+   *
+   * Normalize the index movement into approximately
+   * -1 → +1.
+   */
+  const indexChange = Number(index?.change || 0);
+  const drift = Math.max(-1, Math.min(1, indexChange / 3));
+
+  /**
+   * Composite market score.
+   *
+   * Breadth gets 70% weight.
+   * Index movement gets 30% weight.
+   */
+  const score = breadth * 0.7 + drift * 0.3;
+
+  /**
+   * Convert the score into a 0-100 strength value.
+   */
   const strength = Math.round(((score + 1) / 2) * 100);
 
-  return { total, advancing, declining, flat, advPct, decPct, flatPct, score, strength };
+  return {
+    total,
+    advancing,
+    declining,
+    flat,
+    advPct,
+    decPct,
+    flatPct,
+    breadth,
+    drift,
+    score,
+    strength,
+  };
 }
 
 /**
- * State machine with hysteresis: leaving a state needs a weaker score than
- * entering it did, or a score resting on the boundary flips every tick.
+ * Determine the visible market state.
+ *
+ * We intentionally use a wider neutral zone.
+ *
+ * With 15 listings:
+ *
+ * 8 advancing / 7 declining
+ *     ↓
+ * ~53% / ~47%
+ *     ↓
+ * NEUTRAL
+ *
+ * 10 advancing / 5 declining
+ *     ↓
+ * ~67% / ~33%
+ *     ↓
+ * BULLISH
+ *
+ * 5 advancing / 10 declining
+ *     ↓
+ * ~33% / ~67%
+ *     ↓
+ * BEARISH
  */
-export function nextMarketState(prev, score) {
-  const enter = 0.16;
-  const exit = 0.07;
-  if (prev === 'BULLISH') return score < exit ? (score < -enter ? 'BEARISH' : 'NEUTRAL') : 'BULLISH';
-  if (prev === 'BEARISH') return score > -exit ? (score > enter ? 'BULLISH' : 'NEUTRAL') : 'BEARISH';
-  if (score > enter) return 'BULLISH';
-  if (score < -enter) return 'BEARISH';
+export function nextMarketState(score, breadth = null) {
+  const BREADTH_THRESHOLD = 0.15;
+
+  /**
+   * Breadth is the primary source of truth.
+   */
+  if (typeof breadth === 'number') {
+    if (breadth >= BREADTH_THRESHOLD) {
+      return 'BULLISH';
+    }
+    if (breadth <= -BREADTH_THRESHOLD) {
+      return 'BEARISH';
+    }
+    return 'NEUTRAL';
+  }
+
+  /**
+   * Fallback if another component calls this function
+   * without providing breadth.
+   */
+  const SCORE_THRESHOLD = 0.15;
+  if (score >= SCORE_THRESHOLD) {
+    return 'BULLISH';
+  }
+  if (score <= -SCORE_THRESHOLD) {
+    return 'BEARISH';
+  }
   return 'NEUTRAL';
 }
