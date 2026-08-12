@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Activity, ArrowRight, ChevronDown, Coins, LayoutGrid, List, Newspaper, Trophy, Wallet } from 'lucide-react';
+import { Activity, ArrowDownRight, ArrowRight, ArrowUpRight, ChevronDown, Coins, LayoutGrid, List, Newspaper, Trophy, Wallet } from 'lucide-react';
 import { StatTile } from './StatTile';
 import { TradingChart } from './TradingChart';
 import { SECTOR_TINT } from './sectorTheme';
@@ -211,19 +211,46 @@ function ChangePill({ change, size = 'md' }) {
   );
 }
 
-function TradeButton({ onClick, locked, block = false }) {
+/**
+ * Buy and sell as two separate actions.
+ *
+ * One 'Trade' button meant every order started with the same extra decision
+ * inside the modal. Naming the side on the card carries the trader's intent
+ * straight through, so the ticket opens on the right side already.
+ *
+ * Sell is dimmed — not disabled — when nothing is held: a trader can still open
+ * the ticket to read the book, and a dead control that gives no reason is worse
+ * than one that explains itself on hover.
+ */
+function TradeActions({ onBuy, onSell, locked, holding, block = false }) {
+  if (locked) {
+    return (
+      <button type="button" disabled className={`mkt-trade ${block ? 'mkt-trade-block' : ''}`}>
+        Locked
+      </button>
+    );
+  }
+
+  const owned = holding?.quantity || 0;
+  const stop = (fn) => (e) => {
+    e.stopPropagation();
+    fn();
+  };
+
   return (
-    <button
-      type="button"
-      onClick={(e) => {
-        e.stopPropagation();
-        onClick();
-      }}
-      disabled={locked}
-      className={`mkt-trade ${block ? 'mkt-trade-block' : ''}`}
-    >
-      {locked ? 'Locked' : 'Trade'}
-    </button>
+    <div className={`mkt-sides ${block ? 'mkt-sides-block' : ''}`}>
+      <button type="button" onClick={stop(onBuy)} className="mkt-side is-buy" title="Buy this listing">
+        Buy
+      </button>
+      <button
+        type="button"
+        onClick={stop(onSell)}
+        className={`mkt-side is-sell ${owned ? '' : 'is-empty'}`}
+        title={owned ? `Sell — you hold ${owned}` : 'You hold none of this listing'}
+      >
+        Sell
+      </button>
+    </div>
   );
 }
 
@@ -279,7 +306,13 @@ function StockCardLarge({ stock, stats, flash, onTrade, onFocus, holding, locked
         </div>
 
         <div className="mkt-action">
-          <TradeButton onClick={() => onTrade(stock)} locked={locked} block />
+          <TradeActions
+            onBuy={() => onTrade(stock, 'BUY')}
+            onSell={() => onTrade(stock, 'SELL')}
+            locked={locked}
+            holding={holding}
+            block
+          />
         </div>
       </div>
     </div>
@@ -319,7 +352,13 @@ function StockCardCompact({ stock, stats, flash, onTrade, onFocus, holding, lock
         </div>
 
         <div className="mkt-action">
-          <TradeButton onClick={() => onTrade(stock)} locked={locked} block />
+          <TradeActions
+            onBuy={() => onTrade(stock, 'BUY')}
+            onSell={() => onTrade(stock, 'SELL')}
+            locked={locked}
+            holding={holding}
+            block
+          />
         </div>
       </div>
     </div>
@@ -365,7 +404,12 @@ function StockRow({ stock, stats, flash, onTrade, onFocus, holding, locked, isFo
         <ChangePill change={stats.change} size="sm" />
       </div>
 
-      <TradeButton onClick={() => onTrade(stock)} locked={locked} />
+      <TradeActions
+        onBuy={() => onTrade(stock, 'BUY')}
+        onSell={() => onTrade(stock, 'SELL')}
+        locked={locked}
+        holding={holding}
+      />
     </div>
   );
 }
@@ -392,9 +436,12 @@ export function MarketSection({
   newsFeed = [],
   onTrade,
   onOpenNews,
-  locked
+  locked,
+  sessionStart
 }) {
-  const [focus, setFocus] = useState('ARENA');
+  // The chart always follows a real listing. Empty means 'not chosen yet', in
+  // which case the first listing on the board stands in — never a composite.
+  const [focus, setFocus] = useState('');
   const [timeframe, setTimeframe] = useState('M15');
   const [sessionBySymbol, setSessionBySymbol] = useState({});
   const [focusHistory, setFocusHistory] = useState([]);
@@ -414,7 +461,7 @@ export function MarketSection({
     );
   }, [stocks, query]);
 
-  const focused = focus === 'ARENA' ? null : stocks.find((s) => s.symbol === focus);
+  const focused = stocks.find((s) => s.symbol === focus) || stocks[0] || null;
   const frame = TIMEFRAMES.find((t) => t.id === timeframe) || TIMEFRAMES[0];
 
   /**
@@ -464,72 +511,64 @@ export function MarketSection({
     };
   }, [focused?.id]);
 
+  /**
+   * Where this session began.
+   *
+   * /stocks/:id/history?range=ALL hands back every tick the table has ever
+   * stored, which spans every session ever run — the great majority of it from
+   * days that have nothing to do with this game. Everything below is cut to the
+   * live session so no chart, sparkline or volume total can quote a past one.
+   */
+  const sessionStartMs = useMemo(() => {
+    const t = sessionStart ? new Date(sessionStart).getTime() : NaN;
+    return Number.isFinite(t) ? t : null;
+  }, [sessionStart]);
+
+  const inSession = useCallback(
+    (rows) => {
+      const clean = (rows || []).filter((r) => Number.isFinite(r?.price) && r?.timestamp);
+      if (sessionStartMs === null) return clean;
+      const cut = clean.filter((r) => new Date(r.timestamp).getTime() >= sessionStartMs);
+      // A session seconds old may not have printed yet; the recent tail is
+      // still truer than silently falling back to last week.
+      return cut.length ? cut : clean.slice(-1);
+    },
+    [sessionStartMs]
+  );
+
   /** Stored session with any fresher live ticks appended. */
   const seriesFor = useCallback(
     (stock) => {
       const stored = sessionBySymbol[stock.symbol] || [];
       const live = stock.priceHistories || [];
-      if (!stored.length) return live;
+      if (!stored.length) return inSession(live);
       const lastTs = new Date(stored[stored.length - 1].timestamp).getTime();
-      return [...stored, ...live.filter((h) => new Date(h.timestamp).getTime() > lastTs)];
+      return inSession([...stored, ...live.filter((h) => new Date(h.timestamp).getTime() > lastTs)]);
     },
-    [sessionBySymbol]
+    [sessionBySymbol, inSession]
   );
-
-  /** The composite index, summed tick-for-tick across every listing. */
-  const indexSeries = useMemo(() => {
-    const usable = stocks.map((s) => sessionBySymbol[s.symbol]).filter((rows) => rows?.length);
-    if (!usable.length) return [];
-    // Align from the newest tick backwards so every stock contributes the same
-    // number of samples to each index point.
-    const depth = Math.min(...usable.map((rows) => rows.length), 1400);
-    return Array.from({ length: depth }, (_, i) => {
-      let price = 0;
-      let volume = 0;
-      let timestamp = null;
-      for (const rows of usable) {
-        const row = rows[rows.length - depth + i];
-        price += row?.price || 0;
-        volume += row?.volume || 0;
-        if (!timestamp) timestamp = row?.timestamp;
-      }
-      return { price, volume, timestamp };
-    });
-  }, [stocks, sessionBySymbol]);
 
   /** Ticks feeding the big chart, cut to the selected window. */
   const chartTicks = useMemo(() => {
-    let base;
+    if (!focused) return [];
 
-    if (focused) {
-      const stored = focusHistory.length ? focusHistory : focused.priceHistories || [];
-      const lastTs = stored.length ? new Date(stored[stored.length - 1].timestamp).getTime() : 0;
-      const live = (focused.priceHistories || []).filter((h) => new Date(h.timestamp).getTime() > lastTs);
-      base = [...stored, ...live];
-    } else if (indexSeries.length) {
-      base = indexSeries;
-    } else {
-      const withHistory = stocks.filter((s) => (s.priceHistories || []).length);
-      if (!withHistory.length) return [];
-      const depth = Math.min(...withHistory.map((s) => s.priceHistories.length));
-      base = Array.from({ length: depth }, (_, i) => {
-        const slice = withHistory.map((s) => s.priceHistories[s.priceHistories.length - depth + i]);
-        return {
-          price: slice.reduce((sum, h) => sum + (h?.price || 0), 0),
-          volume: slice.reduce((sum, h) => sum + (h?.volume || 0), 0),
-          timestamp: slice[0]?.timestamp
-        };
-      });
-    }
+    const stored = focusHistory.length ? focusHistory : focused.priceHistories || [];
+    const lastTs = stored.length ? new Date(stored[stored.length - 1].timestamp).getTime() : 0;
+    const live = (focused.priceHistories || []).filter((h) => new Date(h.timestamp).getTime() > lastTs);
+    const base = inSession([...stored, ...live]);
+
+    if (!base.length) return [];
 
     const windowed =
       frame.minutes === Infinity
         ? base
         : base.filter((t) => Date.now() - new Date(t.timestamp).getTime() <= frame.minutes * 60000);
 
+    // 'All' already means this session and nothing earlier, so the short-window
+    // fallback stays inside it too.
     const chosen = windowed.length >= 8 ? windowed : base.slice(-120);
     return chosen.length > MAX_POINTS ? chosen.slice(-MAX_POINTS) : chosen;
-  }, [focused, focusHistory, indexSeries, stocks, frame.minutes]);
+  }, [focused, focusHistory, inSession, frame.minutes]);
 
   /* ---- Board figures ---- */
   const windowMinutes = (CARD_WINDOWS.find((w) => w.id === cardWindow) || CARD_WINDOWS[3]).minutes;
@@ -586,12 +625,12 @@ export function MarketSection({
     onFocus: (stock) => setFocus(stock.symbol),
     holding: holdingsBySymbol[s.symbol],
     locked,
-    isFocused: focus === s.symbol
+    isFocused: focused?.symbol === s.symbol
   });
 
-  const chartPositive = focused ? (focused.percentChange || 0) >= 0 : (index.change || 0) >= 0;
-  const headlinePrice = focused ? focused.currentPrice || 0 : index.value || 0;
-  const headlineChange = focused ? focused.percentChange || 0 : index.change || 0;
+  const chartPositive = (focused?.percentChange || 0) >= 0;
+  const headlinePrice = focused?.currentPrice || 0;
+  const headlineChange = focused?.percentChange || 0;
 
   const netWorth = portfolio.totalPortfolioValue || 0;
   const holdingsValue = portfolio.totalHoldingsValue || 0;
@@ -660,17 +699,21 @@ export function MarketSection({
               <div className="flex items-center gap-2">
                 {focused && <SectorBadge sector={focused.sector} symbol={focused.symbol} size={32} />}
                 <select
-                  value={focus}
+                  value={focused?.symbol || ''}
                   onChange={(e) => setFocus(e.target.value)}
-                  aria-label="Choose instrument"
+                  aria-label="Choose a stock to chart"
                   className="max-w-[280px] rounded-lg border theme-border bg-[var(--bg-input)] px-2 py-1 text-[13px] font-semibold theme-text-main outline-none focus:border-[var(--accent-ring)]"
+                  disabled={!stocks.length}
                 >
-                  <option value="ARENA">ARENA 15 — Composite index</option>
-                  {stocks.map((s) => (
-                    <option key={s.symbol} value={s.symbol}>
-                      {s.symbol} — {s.name}
-                    </option>
-                  ))}
+                  {stocks.length ? (
+                    stocks.map((s) => (
+                      <option key={s.symbol} value={s.symbol}>
+                        {s.symbol} — {s.name}
+                      </option>
+                    ))
+                  ) : (
+                    <option value="">Loading listings…</option>
+                  )}
                 </select>
               </div>
 
@@ -687,26 +730,53 @@ export function MarketSection({
                   {chartPositive ? '+' : ''}{headlineChange.toFixed(2)}%
                 </span>
               </div>
-              <div className="mt-0.5 text-[11.5px] theme-text-dim">since session open</div>
+              <div className="mt-0.5 text-[11.5px] theme-text-dim">
+                {focused ? `${focused.name} · since session open` : 'Waiting for the board…'}
+              </div>
             </div>
 
-            <div className="flex gap-1 rounded-xl border theme-border p-1" style={{ backgroundColor: 'var(--bg-input)' }}>
-              {TIMEFRAMES.map((t) => (
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              <div className="flex gap-1 rounded-xl border theme-border p-1" style={{ backgroundColor: 'var(--bg-input)' }}>
+                {TIMEFRAMES.map((t) => (
+                  <button
+                    key={t.id}
+                    type="button"
+                    onClick={() => setTimeframe(t.id)}
+                    className={`rounded-lg px-2.5 py-1 text-[11.5px] font-semibold transition ${
+                      timeframe === t.id ? 'bg-[var(--accent)] text-[var(--accent-ink)]' : 'theme-text-muted hover:theme-text-main'
+                    }`}
+                  >
+                    {t.label}
+                  </button>
+                ))}
+              </div>
+
+              <div className="flex items-center gap-1.5">
                 <button
-                  key={t.id}
                   type="button"
-                  onClick={() => setTimeframe(t.id)}
-                  className={`rounded-lg px-2.5 py-1 text-[11.5px] font-semibold transition ${
-                    timeframe === t.id ? 'bg-[var(--accent)] text-[var(--accent-ink)]' : 'theme-text-muted hover:theme-text-main'
-                  }`}
+                  disabled={locked || !focused}
+                  onClick={() => focused && onTrade(focused, 'BUY')}
+                  title={focused ? `Buy ${focused.symbol}` : 'Select a stock to buy'}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-[rgba(34,197,94,0.35)] bg-[rgba(34,197,94,0.10)] px-3 py-2 font-mono text-[10.5px] font-bold uppercase tracking-wider text-[var(--gain-green)] transition hover:bg-[rgba(34,197,94,0.18)] disabled:cursor-not-allowed disabled:opacity-35"
                 >
-                  {t.label}
+                  <ArrowUpRight className="h-3.5 w-3.5" />
+                  Buy
                 </button>
-              ))}
+                <button
+                  type="button"
+                  disabled={locked || !focused}
+                  onClick={() => focused && onTrade(focused, 'SELL')}
+                  title={focused ? `Sell ${focused.symbol}` : 'Select a stock to sell'}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-[rgba(239,68,68,0.35)] bg-[rgba(239,68,68,0.10)] px-3 py-2 font-mono text-[10.5px] font-bold uppercase tracking-wider text-[var(--loss-red)] transition hover:bg-[rgba(239,68,68,0.18)] disabled:cursor-not-allowed disabled:opacity-35"
+                >
+                  <ArrowDownRight className="h-3.5 w-3.5" />
+                  Sell
+                </button>
+              </div>
             </div>
           </div>
 
-          <TradingChart ticks={chartTicks} symbol={focused ? focused.symbol : 'ARENA 15'} height={420} />
+          <TradingChart ticks={chartTicks} symbol={focused?.symbol || ''} height={420} />
         </div>
 
         {/* Market wire */}

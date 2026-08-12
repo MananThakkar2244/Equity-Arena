@@ -1,12 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Activity,
   ArrowDownRight,
   ArrowUpRight,
-  Gauge,
-  HeartPulse,
   PieChart as PieIcon,
-  Shield,
   Wallet
 } from 'lucide-react';
 import { sectorTint } from './sectorTheme';
@@ -14,7 +10,7 @@ import { PortfolioChart } from './PortfolioChart';
 import { apiFetch } from '../../services/api';
 
 /**
- * Portfolio — holdings, allocation, health and the value curve.
+ * Portfolio — holdings, allocation and the value curve.
  *
  * Two sources of truth, deliberately kept apart:
  *   - Live rows (holdings, P/L, allocation) are priced off the `stocks` feed,
@@ -130,25 +126,6 @@ function Donut({ slices, total }) {
   );
 }
 
-function HealthBar({ icon: Icon, label, score, colour }) {
-  return (
-    <div className="flex items-center gap-3 py-[7px]">
-      <Icon className="h-4 w-4 shrink-0" style={{ color: colour }} />
-      <span className="w-[104px] shrink-0 text-[12.5px] theme-text-muted">{label}</span>
-      <div className="h-[6px] flex-1 overflow-hidden rounded-full bg-[currentColor]/10">
-        <div
-          className="h-full rounded-full transition-[width] duration-700"
-          style={{ width: `${Math.max(2, score)}%`, backgroundColor: colour }}
-        />
-      </div>
-      <span className="w-[52px] shrink-0 text-right font-mono text-[12.5px] font-bold tabular-nums theme-text-main">
-        {score}
-        <span className="text-[10px] font-normal opacity-50"> /100</span>
-      </span>
-    </div>
-  );
-}
-
 export function PortfolioSection({ portfolio, stocks, onTrade, locked }) {
   const [range, setRange] = useState('3h');
   const [history, setHistory] = useState(null);
@@ -259,47 +236,6 @@ export function PortfolioSection({ portfolio, stocks, onTrade, locked }) {
         .sort((a, b) => b.value - a.value)
     };
   }, [holdings]);
-
-  /**
-   * Portfolio health.
-   *
-   * Every score is derived from the book the trader actually holds — nothing
-   * is a random flourish, so the advice under it is honest.
-   */
-  const health = useMemo(() => {
-    const sectors = allocation.slices.length;
-    const deployed = totals.netWorth > 0 ? totals.current / totals.netWorth : 0;
-
-    // Herfindahl index: 1.0 means everything sits in one sector.
-    const hhi = allocation.slices.reduce((s, x) => s + (x.share / 100) ** 2, 0) || 1;
-
-    const diversification = Math.round(Math.min(100, (sectors / 5) * 55 + (1 - hhi) * 45));
-
-    const topWeight = allocation.slices[0]?.share || 0;
-    const riskBalance = Math.round(Math.max(0, Math.min(100, 100 - Math.max(0, topWeight - 25) * 1.15)));
-
-    // A sweet spot near 70% deployed: idle cash wastes the session, and being
-    // fully invested leaves nothing to answer a move with.
-    const cashUtilization = Math.round(Math.max(0, Math.min(100, 100 - Math.abs(deployed - 0.7) * 165)));
-
-    const performance = Math.round(Math.max(0, Math.min(100, 50 + sessionPLPercent * 6)));
-
-    const score = Math.round(
-      diversification * 0.28 + riskBalance * 0.24 + cashUtilization * 0.18 + performance * 0.3
-    );
-
-    const verdict =
-      score >= 80 ? 'Excellent' : score >= 65 ? 'Good' : score >= 45 ? 'Fair' : 'Needs work';
-
-    let tip = 'Good job! Keep diversifying and monitor market trends.';
-    if (!holdings.length) tip = 'No positions yet — put some capital to work before the session runs out.';
-    else if (sectors < 3) tip = `Only ${sectors} sector${sectors === 1 ? '' : 's'} in play. Spreading wider softens a single bad print.`;
-    else if (topWeight > 55) tip = `${allocation.slices[0].key} is ${topWeight.toFixed(0)}% of the book — trim it or hedge it.`;
-    else if (deployed < 0.3) tip = 'Most of your capital is idle. The clock is the real constraint here.';
-    else if (deployed > 0.95) tip = 'Almost fully invested — keep some cash to answer a dip.';
-
-    return { diversification, riskBalance, cashUtilization, performance, score, verdict, tip };
-  }, [allocation, totals, sessionPLPercent, holdings.length]);
 
   const trades = (portfolio.transactions || []).slice(0, 6);
   const up = sessionPL >= 0;
@@ -478,14 +414,30 @@ export function PortfolioSection({ portfolio, stocks, onTrade, locked }) {
                             <Sparkline prices={h.spark} positive={gain} />
                           </td>
                           <td className="px-3 py-3 text-center">
-                            <button
-                              type="button"
-                              disabled={locked}
-                              onClick={() => onTrade(stockBySymbol[h.symbol] || h)}
-                              className="rounded-lg border border-[var(--loss-red,#ef4444)]/45 px-4 py-1.5 font-mono text-[11.5px] font-bold text-[var(--loss-red,#ef4444)] transition-colors hover:bg-[var(--loss-red,#ef4444)]/10 disabled:cursor-not-allowed disabled:opacity-40"
-                            >
-                              {locked ? 'Locked' : 'Sell'}
-                            </button>
+                            {locked ? (
+                              <span className="font-mono text-[11.5px] font-bold theme-text-dim">Locked</span>
+                            ) : (
+                              /* Add to the position or close it, without a detour
+                                 through the ticket to pick a side. */
+                              <div className="mkt-sides justify-center">
+                                <button
+                                  type="button"
+                                  onClick={() => onTrade(stockBySymbol[h.symbol] || h, 'BUY')}
+                                  className="mkt-side is-buy"
+                                  title={`Add to ${h.symbol}`}
+                                >
+                                  Buy
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => onTrade(stockBySymbol[h.symbol] || h, 'SELL')}
+                                  className="mkt-side is-sell"
+                                  title={`Sell ${h.symbol}`}
+                                >
+                                  Sell
+                                </button>
+                              </div>
+                            )}
                           </td>
                         </tr>
                       );
@@ -639,66 +591,6 @@ export function PortfolioSection({ portfolio, stocks, onTrade, locked }) {
             )}
           </div>
 
-          {/* ---- health ---- */}
-          <div className="rounded-2xl border theme-border theme-bg-card p-5">
-            <div className="mb-3 flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <HeartPulse className="h-[18px] w-[18px] text-[var(--accent)]" />
-                <h2 className="font-heading text-[16px] font-bold theme-text-main">Portfolio Health</h2>
-              </div>
-              <span className="text-[10.5px] theme-text-dim">Score</span>
-            </div>
-
-            <div className="flex items-center gap-4">
-              <div className="min-w-0 flex-1">
-                <HealthBar icon={PieIcon} label="Diversification" score={health.diversification} colour="#3b82f6" />
-                <HealthBar icon={Shield} label="Risk Balance" score={health.riskBalance} colour="#f59e0b" />
-                <HealthBar icon={Gauge} label="Cash Utilization" score={health.cashUtilization} colour="#22d3ee" />
-                <HealthBar icon={Activity} label="Performance" score={health.performance} colour="#22c55e" />
-              </div>
-
-              <div className="relative grid h-[104px] w-[104px] shrink-0 place-items-center">
-                <svg viewBox="0 0 100 100" className="h-full w-full -rotate-90">
-                  <circle
-                    cx="50"
-                    cy="50"
-                    r="42"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeOpacity="0.1"
-                    strokeWidth="7"
-                  />
-                  <circle
-                    cx="50"
-                    cy="50"
-                    r="42"
-                    fill="none"
-                    stroke="var(--accent)"
-                    strokeWidth="7"
-                    strokeLinecap="round"
-                    strokeDasharray={`${(health.score / 100) * 2 * Math.PI * 42} ${2 * Math.PI * 42}`}
-                    className="transition-[stroke-dasharray] duration-700"
-                  />
-                </svg>
-                <div className="absolute inset-0 grid place-items-center text-center">
-                  <div>
-                    <div className="font-mono text-[26px] font-bold leading-none tabular-nums theme-text-main">
-                      {health.score}
-                    </div>
-                    <div className="font-mono text-[10px] theme-text-dim">/100</div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div className="mt-2 text-center font-mono text-[13px] font-bold text-[var(--gain-green,#22c55e)]">
-              {health.verdict}
-            </div>
-
-            <p className="mt-3 border-t theme-border pt-3 text-center text-[11.5px] theme-text-muted">
-              {health.tip}
-            </p>
-          </div>
         </div>
       </div>
     </div>

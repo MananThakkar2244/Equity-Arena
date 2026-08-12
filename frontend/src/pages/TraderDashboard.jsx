@@ -7,7 +7,8 @@ import { isSoundMuted, toggleSoundMute } from '../services/soundService';
 
 import { StockDetailModal } from '../components/StockDetailModal';
 import { NewsToast } from '../components/NewsToast';
-import { BullCelebration } from '../components/BullCelebration';
+import { OrderSuccessLayer } from '../components/OrderSuccessAnimation';
+import { TradeFeedbackOverlay } from '../components/TradeFeedbackOverlay';
 
 import { Sidebar, SECTIONS } from '../components/dashboard/Sidebar';
 import { TopBar } from '../components/dashboard/TopBar';
@@ -53,13 +54,21 @@ export function TraderDashboard() {
 
   const [selectedStock, setSelectedStock] = useState(null);
   const [isDetailOpen, setIsDetailOpen] = useState(false);
-  const [celebration, setCelebration] = useState(null);
+  // Which side the trader asked for on the card, so the ticket opens on it.
+  const [tradeSide, setTradeSide] = useState('BUY');
+  // An executed fill and a plain notice are different things. Only a real fill
+  // ever reaches the confirmation animation; booked limit orders, cancellations
+  // and failures take the quiet path.
+  const [orderFill, setOrderFill] = useState(null);
+  const [notice, setNotice] = useState(null);
   const [cancellingOrderId, setCancellingOrderId] = useState(null);
 
   const [session, setSession] = useState(null);
   const [remainingSeconds, setRemainingSeconds] = useState(0);
 
   const flashTimers = useRef({});
+  // Read inside callbacks that must not re-create themselves on every tick.
+  const portfolioRef = useRef(portfolio);
 
   /* ---------------------------------------------------------------- *
    * Data
@@ -207,6 +216,10 @@ export function TraderDashboard() {
     };
   }, [socket, fetchStocks, fetchPortfolio, fetchNews, fetchSession]);
 
+  useEffect(() => {
+    portfolioRef.current = portfolio;
+  }, [portfolio]);
+
   // Drop pending flash timers on unmount
   useEffect(() => {
     const timers = flashTimers.current;
@@ -217,7 +230,8 @@ export function TraderDashboard() {
    * Derived values
    * ---------------------------------------------------------------- */
 
-  // ARENA 15 — the whole board summed, versus its session-open base
+  // The board summed against its session-open base. No longer charted or
+  // labelled as an index — it only feeds the market-state read now.
   const index = useMemo(() => {
     const total = stocks.reduce((sum, s) => sum + (s.currentPrice || 0), 0);
     const base = stocks.reduce((sum, s) => sum + (s.basePrice || s.currentPrice || 0), 0);
@@ -291,21 +305,44 @@ export function TraderDashboard() {
   /* ---------------------------------------------------------------- *
    * Handlers
    * ---------------------------------------------------------------- */
-  const handleTrade = useCallback((stock) => {
+  const handleTrade = useCallback((stock, side = 'BUY') => {
     setSelectedStock(stock);
+    setTradeSide(side === 'SELL' ? 'SELL' : 'BUY');
     setIsDetailOpen(true);
   }, []);
 
   const handleTradeSuccess = useCallback(
     (message, updatedPortfolio, fill) => {
-      setCelebration({
-        status: 'success',
-        message,
-        side: fill?.side || 'BUY',
-        symbol: fill?.symbol,
-        quantity: fill?.quantity,
-        price: fill?.price
-      });
+      const qtyOf = (book, symbol) =>
+        (book?.holdings || []).find((h) => h.symbol === symbol)?.quantity ?? 0;
+
+      // A fill carries a symbol, a quantity and a price. Anything without all
+      // three — a booked limit order, a cancellation — is a notice, not a fill.
+      const isFill = Boolean(fill?.symbol) && Number(fill?.quantity) > 0 && Number.isFinite(Number(fill?.price));
+
+      if (isFill) {
+        const before = portfolioRef.current || {};
+        const after = updatedPortfolio ? { ...before, ...updatedPortfolio } : before;
+        const price = Number(fill.price);
+        const quantity = Number(fill.quantity);
+
+        setOrderFill({
+          // Unique per fill, so a second trade replaces the card rather than
+          // stacking a duplicate on top of it.
+          id: `${fill.symbol}-${Date.now()}`,
+          type: fill.side === 'SELL' ? 'sell' : 'buy',
+          symbol: fill.symbol,
+          quantity,
+          executionPrice: price,
+          total: Math.round(quantity * price * 100) / 100,
+          cashBefore: Number(before.walletBalance),
+          cashAfter: Number(after.walletBalance),
+          sharesBefore: qtyOf(before, fill.symbol),
+          sharesAfter: qtyOf(after, fill.symbol)
+        });
+      } else if (message) {
+        setNotice({ status: 'success', message });
+      }
 
       if (updatedPortfolio) {
         setPortfolio((prev) => ({ ...prev, ...updatedPortfolio }));
@@ -321,10 +358,10 @@ export function TraderDashboard() {
       setCancellingOrderId(orderId);
       try {
         const data = await apiFetch(`/orders/${orderId}`, { method: 'DELETE' });
-        setCelebration({ status: 'success', side: 'SELL', message: data.message || 'Order cancelled' });
+        setNotice({ status: 'success', message: data.message || 'Order cancelled' });
         fetchPortfolio();
       } catch (err) {
-        setCelebration({ status: 'error', message: err.message || 'Could not cancel that order' });
+        setNotice({ status: 'error', message: err.message || 'Could not cancel that order' });
       } finally {
         setCancellingOrderId(null);
       }
@@ -364,7 +401,7 @@ export function TraderDashboard() {
           newsCount={badges.NEWS}
         />
 
-        <MarketStrip stocks={stocks} index={index} />
+        <MarketStrip stocks={stocks} />
 
         <TickerTape stocks={stocks} onSelect={handleTrade} />
 
@@ -416,6 +453,7 @@ export function TraderDashboard() {
                 onTrade={handleTrade}
                 onOpenNews={() => handleSectionChange('NEWS')}
                 locked={locked}
+                sessionStart={session?.startTime}
               />
             )}
 
@@ -448,12 +486,20 @@ export function TraderDashboard() {
         userWallet={portfolio.walletBalance}
         userHolding={liveSelectedStock ? holdingsBySymbol[liveSelectedStock.symbol] : null}
         isOpen={isDetailOpen}
+        initialSide={tradeSide}
+        sessionStart={session?.startTime}
         onClose={() => setIsDetailOpen(false)}
         onSuccess={handleTradeSuccess}
         isTradingLocked={locked}
       />
 
-      <BullCelebration result={celebration} onClose={() => setCelebration(null)} />
+      <OrderSuccessLayer fill={orderFill} onComplete={() => setOrderFill(null)} />
+
+      <TradeFeedbackOverlay
+        status={notice?.status}
+        message={notice?.message}
+        onClose={() => setNotice(null)}
+      />
 
       <NewsToast news={activeNewsToast} onClose={() => setActiveNewsToast(null)} />
     </div>

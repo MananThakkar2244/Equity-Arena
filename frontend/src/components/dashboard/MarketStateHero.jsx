@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
 import {
   TrendingUp,
@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 
 import { readMarket, nextMarketState } from './marketState';
+import { AnimatedNumber } from '../AnimatedNumber';
 
 export function MarketStateHero({
   stocks = [],
@@ -19,7 +20,13 @@ export function MarketStateHero({
     [stocks, index]
   );
 
-  const state = nextMarketState('NEUTRAL', read.score);
+  // Feed the machine its own previous state. Passing a literal 'NEUTRAL' threw
+  // the hysteresis away, so a score sitting on a threshold re-decided from
+  // scratch every tick instead of holding.
+  const [state, setState] = useState('NEUTRAL');
+  useEffect(() => {
+    setState((prev) => nextMarketState(prev, read.score));
+  }, [read.score]);
 
   const isBull = state === 'BULLISH';
   const isBear = state === 'BEARISH';
@@ -49,8 +56,11 @@ export function MarketStateHero({
 
   const hasMarketData = total > 0;
 
+  // read.score is -1..+1. Rounding it directly collapsed every market in the
+  // game to -1, 0 or +1, which is what put a bare "-1" on the dial. The meter
+  // below already declares a -100..100 range, so scale to that.
   const score = Number.isFinite(read.score)
-    ? Math.round(read.score)
+    ? Math.round(read.score * 100)
     : 0;
 
   // FIXED: Proper template literals
@@ -79,19 +89,14 @@ export function MarketStateHero({
           AMBIENT MARKET GLOW
       ========================================================== */}
 
-      <motion.div
+      {/* A gradient is a string, not a number, so Framer cannot tween it — it
+          snapped on every state read. CSS transitions the colour smoothly for
+          free instead. */}
+      <div
         aria-hidden="true"
-        className="pointer-events-none absolute inset-0"
-        animate={{
-          background: `radial-gradient(
-            circle at 50% 45%,
-            rgba(${tone.rgb}, 0.13),
-            transparent 68%
-          )`,
-        }}
-        transition={{
-          duration: 0.8,
-          ease: 'easeOut',
+        className="pointer-events-none absolute inset-0 transition-[background] duration-700 ease-out"
+        style={{
+          background: `radial-gradient(circle at 50% 45%, rgba(${tone.rgb}, 0.13), transparent 68%)`,
         }}
       />
 
@@ -214,23 +219,16 @@ export function MarketStateHero({
 
             <div className="mt-3 flex items-baseline gap-1.5">
 
-              <motion.span
-                key={scoreLabel}
-                initial={{
-                  opacity: 0,
-                  y: 5,
-                }}
-                animate={{
-                  opacity: 1,
-                  y: 0,
-                }}
+              {/* Counts to the new value. A `key` here remounted the element on
+                  every price tick, replaying the enter animation — which read
+                  as the number flashing rather than moving. */}
+              <span
                 className="font-mono text-xl font-bold"
-                style={{
-                  color: tone.color,
-                }}
+                style={{ color: tone.color }}
               >
-                {scoreLabel}
-              </motion.span>
+                {score > 0 ? '+' : ''}
+                <AnimatedNumber value={score} decimals={0} duration={450} />
+              </span>
 
               <span className="font-mono text-[9px] uppercase tracking-wider theme-text-dim">
                 Market Score
@@ -256,7 +254,6 @@ export function MarketStateHero({
                   overflow-hidden rounded-full
                   border theme-border
                   bg-[var(--bg-panel,#121929)]
-                  p-[2px]
                 "
                 role="meter"
                 aria-label="Market balance"
@@ -403,7 +400,7 @@ function MarketForceCard({
         duration: 0.2,
       }}
       className={`
-        relative isolate overflow-hidden
+        relative isolate flex h-full flex-col justify-between overflow-hidden
         rounded-xl border
         p-4
         ${
@@ -454,46 +451,21 @@ function MarketForceCard({
 
         </span>
 
-        <motion.span
-          key={percentage}
-          initial={{
-            opacity: 0,
-            scale: 0.9,
-          }}
-          animate={{
-            opacity: 1,
-            scale: 1,
-          }}
-          className="font-mono text-lg font-bold"
-          style={{
-            color,
-          }}
-        >
-          {percentage}%
-        </motion.span>
+        <span className="font-mono text-lg font-bold" style={{ color }}>
+          <AnimatedNumber value={percentage} decimals={0} suffix="%" duration={450} />
+        </span>
 
       </div>
 
       {/* Bottom content */}
 
-      <div className="relative z-10 mt-8 flex items-end justify-between gap-4">
+      <div className="relative z-10 mt-6 flex items-end justify-between gap-4">
 
         <div>
 
-          <motion.div
-            key={count}
-            initial={{
-              opacity: 0,
-              y: 4,
-            }}
-            animate={{
-              opacity: 1,
-              y: 0,
-            }}
-            className="font-heading text-[23px] font-bold theme-text-main"
-          >
-            {Number(count || 0).toLocaleString()}
-          </motion.div>
+          <div className="font-heading text-[23px] font-bold theme-text-main">
+            <AnimatedNumber value={Number(count || 0)} decimals={0} duration={450} />
+          </div>
 
           <div className="mt-0.5 font-mono text-[9px] uppercase tracking-wider theme-text-dim">
             {label}
@@ -512,7 +484,7 @@ function MarketForceCard({
             viewBox="0 0 100 30"
             className="h-full w-full overflow-visible"
             preserveAspectRatio="none"
-          >
+          >                               
 
             <defs>
 

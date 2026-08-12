@@ -1,11 +1,11 @@
 import React, { useMemo } from 'react';
 
 /**
- * The index ribbon under the header. The reference design shows NIFTY / SENSEX
- * / BANK NIFTY — Equity Arena has none of those, so this carries the stats that
- * actually exist here: the composite index, breadth, and session volume.
+ * The stats ribbon under the header — breadth, session volume and the day's
+ * strongest listing. It used to lead with a composite 'Arena 15' index, which
+ * was a number no player could ever trade; the board itself is the story here.
  */
-export function MarketStrip({ stocks, index }) {
+export function MarketStrip({ stocks }) {
   const stats = useMemo(() => {
     const advancers = stocks.filter((s) => (s.percentChange || 0) > 0).length;
     const decliners = stocks.filter((s) => (s.percentChange || 0) < 0).length;
@@ -17,8 +17,6 @@ export function MarketStrip({ stocks, index }) {
 
     return { advancers, decliners, volume, strongest };
   }, [stocks]);
-
-  const indexUp = (index.change || 0) >= 0;
 
   const Item = ({ label, value, tone, sub }) => (
     <div className="flex shrink-0 items-baseline gap-2">
@@ -37,12 +35,6 @@ export function MarketStrip({ stocks, index }) {
       className="flex flex-wrap items-center gap-x-7 gap-y-2 border-b theme-border px-4 py-2.5 sm:px-6"
       style={{ backgroundColor: 'var(--bg-card)' }}
     >
-      <Item
-        label="Arena 15"
-        value={(index.value || 0).toFixed(2)}
-        tone={indexUp ? 'var(--gain-green)' : 'var(--loss-red)'}
-        sub={`${indexUp ? '▲' : '▼'} ${Math.abs(index.change || 0).toFixed(2)}%`}
-      />
       <Item label="Advancing" value={stats.advancers} tone="var(--gain-green)" sub="▲" />
       <Item label="Declining" value={stats.decliners} tone="var(--loss-red)" sub="▼" />
       <Item label="Tick volume" value={stats.volume.toLocaleString('en-IN')} />

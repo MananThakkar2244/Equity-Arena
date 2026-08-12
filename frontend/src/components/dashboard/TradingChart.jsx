@@ -101,6 +101,8 @@ export function TradingChart({ ticks = [], symbol = '', height = 430 }) {
     return {
       min,
       max,
+      lo,
+      hi,
       x: (i) => PAD.left + (n === 1 ? plotW / 2 : (i / (n - 1)) * plotW),
       y: (p) => PAD.top + plotH - ((p - min) / (max - min)) * plotH
     };
@@ -158,10 +160,10 @@ export function TradingChart({ ticks = [], symbol = '', height = 430 }) {
           Price <span className="font-semibold theme-text-main">{num(active.price).toFixed(2)}</span>
         </span>
         <span className="theme-text-dim">
-          H <span className="font-semibold theme-text-muted">{num(active.high).toFixed(2)}</span>
+          H <span className="font-semibold theme-text-muted">{num(scale.hi).toFixed(2)}</span>
         </span>
         <span className="theme-text-dim">
-          L <span className="font-semibold theme-text-muted">{num(active.low).toFixed(2)}</span>
+          L <span className="font-semibold theme-text-muted">{num(scale.lo).toFixed(2)}</span>
         </span>
         <span className="theme-text-dim">· {clock(active.time)}</span>
       </div>
@@ -359,12 +361,14 @@ export function TradingChart({ ticks = [], symbol = '', height = 430 }) {
             <div className="mt-1 font-mono text-[15px] font-bold tabular-nums theme-text-main">
               {num(active.price).toFixed(2)} <span className="text-[10px] theme-text-dim">IC</span>
             </div>
-            <div className="mt-1 flex justify-between gap-3 font-mono text-[11px]">
-              <span className="theme-text-dim">H / L</span>
-              <span className="theme-text-main tabular-nums">
-                {num(active.high).toFixed(2)} / {num(active.low).toFixed(2)}
-              </span>
-            </div>
+            {active.high !== active.low && (
+              <div className="mt-1 flex justify-between gap-3 font-mono text-[11px]">
+                <span className="theme-text-dim">H / L</span>
+                <span className="theme-text-main tabular-nums">
+                  {num(active.high).toFixed(2)} / {num(active.low).toFixed(2)}
+                </span>
+              </div>
+            )}
           </div>
         )}
       </div>

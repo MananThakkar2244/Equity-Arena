@@ -1,20 +1,43 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { apiFetch } from '../services/api';
 import { useSocket } from '../context/SocketContext';
-import { Sparkline, calculateSMA } from './Sparkline';
 import { AnimatedNumber } from './AnimatedNumber';
-import { 
-  X, ArrowUpRight, ArrowDownRight, TrendingUp, TrendingDown, 
-  ShoppingBag, AlertTriangle, Calendar, BarChart2, Activity, Zap, Clock, Ban
+import { DetailChart } from './dashboard/DetailChart';
+import { motion } from 'framer-motion';
+import {
+  X, ArrowUpRight, ArrowDownRight, TrendingUp, TrendingDown,
+  ShoppingBag, AlertTriangle, BarChart2, Activity, Zap, Clock, Ban
 } from 'lucide-react';
 
-export function StockDetailModal({ stock, userWallet, userHolding, isOpen, onClose, onSuccess, isTradingLocked }) {
+/**
+ * Chart windows, sized for a three-hour session. ALL means this session and
+ * nothing before it — never a previous game's ticks.
+ */
+const FRAMES = [
+  { id: 'M5', label: '5M', minutes: 5 },
+  { id: 'M15', label: '15M', minutes: 15 },
+  { id: 'M30', label: '30M', minutes: 30 },
+  { id: 'H1', label: '1H', minutes: 60 },
+  { id: 'ALL', label: 'ALL', minutes: Infinity }
+];
+
+const HISTORY_REFRESH_MS = 90_000;
+
+const compactVolume = (v) => {
+  if (!Number.isFinite(v) || v <= 0) return '0';
+  if (v >= 1e9) return `${(v / 1e9).toFixed(2)}B`;
+  if (v >= 1e6) return `${(v / 1e6).toFixed(2)}M`;
+  if (v >= 1e3) return `${(v / 1e3).toFixed(1)}K`;
+  return String(Math.round(v));
+};
+
+export function StockDetailModal({ stock, userWallet, userHolding, isOpen, initialSide = 'BUY', sessionStart, onClose, onSuccess, isTradingLocked }) {
   const { socket } = useSocket();
   const [tradeCategory, setTradeCategory] = useState('INSTANT'); // 'INSTANT' or 'LIMIT'
-  const [mode, setMode] = useState('BUY'); // 'BUY' or 'SELL'
+  const [mode, setMode] = useState(initialSide === 'SELL' ? 'SELL' : 'BUY'); // 'BUY' or 'SELL'
   const [quantity, setQuantity] = useState(1);
   const [targetPrice, setTargetPrice] = useState(stock ? stock.currentPrice.toFixed(2) : '10.00');
-  const [timeframe, setTimeframe] = useState('1D');
+  const [timeframe, setTimeframe] = useState('M15');
   const [historyData, setHistoryData] = useState([]);
   const [pendingOrders, setPendingOrders] = useState([]);
   const [balanceInfo, setBalanceInfo] = useState({ availableWalletBalance: userWallet, lockedFunds: 0 });
@@ -53,18 +76,26 @@ export function StockDetailModal({ stock, userWallet, userHolding, isOpen, onClo
     };
   }, [socket]);
 
-  const fetchStockHistory = useCallback(async (stockId, range) => {
+  /**
+   * The full stored series, pulled once.
+   *
+   * Switching window used to round-trip to the server, which made every tab a
+   * loading spinner and let the chart disagree with the price above it while
+   * the request was in flight. The session is small enough to hold in memory,
+   * so the windows below are cut from it locally and switch instantly.
+   */
+  const fetchStockHistory = useCallback(async (stockId) => {
     setLoadingHistory(true);
     try {
-      const history = await apiFetch(`/stocks/${stockId}/history?range=${range}`);
-      setHistoryData(history);
+      const history = await apiFetch(`/stocks/${stockId}/history?range=ALL`);
+      setHistoryData(Array.isArray(history) ? history : history?.history || []);
     } catch (err) {
       console.error('Failed to fetch stock detail history:', err);
-      setHistoryData(stock?.priceHistories || []);
+      setHistoryData([]);
     } finally {
       setLoadingHistory(false);
     }
-  }, [stock?.id]);
+  }, []);
 
   const fetchOrders = useCallback(async () => {
     try {
@@ -87,16 +118,88 @@ export function StockDetailModal({ stock, userWallet, userHolding, isOpen, onClo
       setQuantity(1);
       setTargetPrice(stock.currentPrice.toFixed(2));
       setError('');
+      // Honour the side picked on the card. Re-applied on every open so the
+      // ticket never reopens on whichever side was used last time.
+      setMode(initialSide === 'SELL' ? 'SELL' : 'BUY');
     }
-  }, [stock?.id, isOpen]);
+  }, [stock?.id, isOpen, initialSide]);
 
-  // History & Orders fetch
+  // History & Orders fetch. Kept off `timeframe` — windows are cut locally.
   useEffect(() => {
-    if (stock && isOpen) {
-      fetchStockHistory(stock.id, timeframe);
-      fetchOrders();
+    if (!stock?.id || !isOpen) return undefined;
+    fetchStockHistory(stock.id);
+    fetchOrders();
+    // The socket tail only reaches back so far, so the stored series is topped
+    // up well inside that overlap; leave it longer and a hole opens between the
+    // two that the line would happily be drawn straight across.
+    const id = setInterval(() => fetchStockHistory(stock.id), HISTORY_REFRESH_MS);
+    return () => clearInterval(id);
+  }, [stock?.id, isOpen, fetchStockHistory, fetchOrders]);
+
+  const sessionStartMs = useMemo(() => {
+    const t = sessionStart ? new Date(sessionStart).getTime() : NaN;
+    return Number.isFinite(t) ? t : null;
+  }, [sessionStart]);
+
+  /**
+   * Stored series plus whatever the socket has delivered since, cut to this
+   * session. Merging the live tail is what keeps the last point on the chart
+   * equal to the spot price in the header — they are the same number.
+   */
+  const sessionTicks = useMemo(() => {
+    const stored = historyData || [];
+    const live = stock?.priceHistories || [];
+    const lastStored = stored.length ? new Date(stored[stored.length - 1].timestamp).getTime() : 0;
+    const merged = [
+      ...stored,
+      ...live.filter((h) => new Date(h.timestamp).getTime() > lastStored)
+    ].filter((h) => Number.isFinite(h?.price) && h?.timestamp);
+
+    if (sessionStartMs === null) return merged;
+    const cut = merged.filter((h) => new Date(h.timestamp).getTime() >= sessionStartMs);
+    return cut.length ? cut : merged.slice(-1);
+  }, [historyData, stock?.priceHistories, sessionStartMs]);
+
+  const frame = FRAMES.find((f) => f.id === timeframe) || FRAMES[1];
+
+  const windowTicks = useMemo(() => {
+    if (frame.minutes === Infinity) return sessionTicks;
+    const cutoff = Date.now() - frame.minutes * 60000;
+    const inWindow = sessionTicks.filter((h) => new Date(h.timestamp).getTime() >= cutoff);
+    // Early in a session a short window can be empty; showing the session so
+    // far beats showing an empty box.
+    return inWindow.length >= 2 ? inWindow : sessionTicks;
+  }, [sessionTicks, frame.minutes]);
+
+  /** Every figure beside the chart is measured over exactly what is drawn. */
+  const windowFigures = useMemo(() => {
+    const prices = windowTicks.map((t) => t.price).filter(Number.isFinite);
+    if (!prices.length) return null;
+    let high = -Infinity;
+    let low = Infinity;
+    for (const p of prices) {
+      if (p > high) high = p;
+      if (p < low) low = p;
     }
-  }, [stock?.id, isOpen, timeframe, fetchStockHistory, fetchOrders]);
+    const open = prices[0];
+    const close = prices[prices.length - 1];
+    let sma = null;
+    if (prices.length >= 10) {
+      let sum = 0;
+      for (let i = prices.length - 10; i < prices.length; i++) sum += prices[i];
+      sma = sum / 10;
+    }
+    return {
+      high,
+      low,
+      open,
+      close,
+      sma,
+      volume: windowTicks.reduce((sum, t) => sum + (t.volume || 0), 0),
+      change: open ? ((close - open) / open) * 100 : 0,
+      count: prices.length
+    };
+  }, [windowTicks]);
 
   if (!isOpen || !stock) return null;
 
@@ -108,19 +211,15 @@ export function StockDetailModal({ stock, userWallet, userHolding, isOpen, onClo
   const instantTotal = Math.round(parsedQty * currentPrice * 100) / 100;
   const limitTotal = Math.round(parsedQty * parsedTargetPrice * 100) / 100;
 
-  const activeHistory = historyData.length > 0 ? historyData : stock.priceHistories || [];
-  const prices = activeHistory.map((h) => h.price);
-  const volumes = activeHistory.map((h) => h.volume || 10000);
-
-  const high24h = prices.length > 0 ? Math.max(...prices) : currentPrice;
-  const low24h = prices.length > 0 ? Math.min(...prices) : currentPrice;
-  const latestVolume = volumes.length > 0 ? volumes[volumes.length - 1] : 10000;
-  const isHighVolume = latestVolume > 35000;
-
-  const smaArray = calculateSMA(activeHistory, 10);
-  const latestSMA = smaArray.length > 0 && smaArray[smaArray.length - 1] !== null
-    ? smaArray[smaArray.length - 1]
-    : currentPrice;
+  // Everything quoted beside the chart comes from the window on screen. The
+  // old figures were labelled '24h' on a three-hour game and fell back to a
+  // hard-coded 10,000 volume whenever a tick carried none — a number no trade
+  // ever produced.
+  const windowHigh = windowFigures ? windowFigures.high : currentPrice;
+  const windowLow = windowFigures ? windowFigures.low : currentPrice;
+  const windowVolume = windowFigures ? windowFigures.volume : 0;
+  const windowChange = windowFigures ? windowFigures.change : 0;
+  const latestSMA = windowFigures && windowFigures.sma != null ? windowFigures.sma : null;
 
   const ownedQty = userHolding ? userHolding.quantity : 0;
   const availableQty = userHolding && userHolding.availableQuantity !== undefined
@@ -159,12 +258,19 @@ export function StockDetailModal({ stock, userWallet, userHolding, isOpen, onClo
         });
 
         if (onSuccess) {
-          // Third arg carries the fill details so the dashboard can celebrate it
+          /*
+           * Third arg carries the fill so the dashboard can confirm it.
+           *
+           * The price comes from the transaction the server wrote, not from the
+           * price this component last rendered — a tick can land between the
+           * two, and 'Filled @' has to be the price the trade actually got.
+           */
+          const filled = data.transaction || {};
           onSuccess(data.message, data.portfolio, {
             side: mode,
             symbol: stock.symbol,
-            quantity: parsedQty,
-            price: stock.currentPrice
+            quantity: Number(filled.quantity) || parsedQty,
+            price: Number.isFinite(Number(filled.price)) ? Number(filled.price) : stock.currentPrice
           });
         }
         fetchOrders();
@@ -211,7 +317,7 @@ export function StockDetailModal({ stock, userWallet, userHolding, isOpen, onClo
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-fadeIn">
-      <div className="w-full max-w-3xl max-h-[90vh] theme-bg-card rounded-[6px] border theme-border shadow-2xl relative flex flex-col overflow-hidden transition-colors">
+      <div className="w-full max-w-6xl max-h-[92vh] theme-bg-card rounded-[10px] border theme-border shadow-2xl relative flex flex-col overflow-hidden transition-colors sdm-shell">
 
         {/* Header */}
         <div className="flex-shrink-0 flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b theme-border px-6 pt-5 pb-4">
@@ -262,87 +368,110 @@ export function StockDetailModal({ stock, userWallet, userHolding, isOpen, onClo
           </div>
         </div>
 
-        {/* Scrollable Body */}
-        <div className="overflow-y-auto px-6 py-6 space-y-6">
+        {/* Scrollable Body — chart on the left, ticket on the right. */}
+        <div className="overflow-y-auto px-5 py-5 sm:px-6">
+        <div className="grid gap-5 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)] lg:items-start">
 
-        {/* Technical Data Badges */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          <div className="theme-bg-panel p-3 rounded-[6px] border theme-border">
-            <div className="text-[10px] uppercase font-mono font-bold theme-text-dim">24h High</div>
-            <div className="text-sm font-bold font-mono theme-text-main mt-0.5">{high24h.toFixed(2)} IC</div>
-          </div>
-          <div className="theme-bg-panel p-3 rounded-[6px] border theme-border">
-            <div className="text-[10px] uppercase font-mono font-bold theme-text-dim">24h Low</div>
-            <div className="text-sm font-bold font-mono theme-text-main mt-0.5">{low24h.toFixed(2)} IC</div>
-          </div>
-          <div className="theme-bg-panel p-3 rounded-[6px] border theme-border">
-            <div className="text-[10px] uppercase font-mono font-bold theme-text-dim flex items-center gap-1">
-              <span>SMA-10 Trend</span>
-              <Activity className="w-3 h-3 text-[#D4A017]" />
-            </div>
-            <div className="text-sm font-bold font-mono text-[#D4A017] mt-0.5">{latestSMA.toFixed(2)} IC</div>
-          </div>
-          <div className="theme-bg-panel p-3 rounded-[6px] border theme-border">
-            <div className="text-[10px] uppercase font-mono font-bold theme-text-dim flex items-center gap-1">
-              <span>Volume</span>
-              <BarChart2 className="w-3 h-3 text-indigo-400" />
-            </div>
-            <div className="text-sm font-bold font-mono text-indigo-300 mt-0.5 flex items-center gap-1.5">
-              <span>{latestVolume.toLocaleString()} shrs</span>
-              {isHighVolume && (
-                <span className="px-1.5 py-0.2 bg-[#D4A017]/20 text-[#D4A017] text-[9px] font-extrabold rounded-[2px] border border-[#D4A017]/40">
-                  HIGH
-                </span>
-              )}
-            </div>
-          </div>
-        </div>
+        {/* ---- Left: price action ---- */}
+        <div className="space-y-4">
 
-        {/* Interactive Chart */}
-        <div className="theme-bg-panel p-4 rounded-[6px] border theme-border space-y-3">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-            <div className="flex items-center gap-3 text-xs font-mono">
-              <div className="flex items-center gap-1.5">
-                <span className="w-2.5 h-2.5 rounded-full bg-[#1DB954] inline-block" />
+        <div className="theme-bg-panel rounded-[8px] border theme-border p-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-center gap-4 font-mono text-[11px]">
+              <span className="flex items-center gap-1.5">
+                <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ backgroundColor: isPositive ? '#1DB954' : '#E8453C' }} />
                 <span className="font-semibold theme-text-main">Spot Price</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <span className="w-2.5 h-0.5 bg-[#D4A017] inline-block border-dashed" />
+              </span>
+              <span className="flex items-center gap-1.5">
+                <svg width="18" height="4" aria-hidden="true">
+                  <line x1="0" y1="2" x2="18" y2="2" stroke="#D4A017" strokeWidth="1.6" strokeDasharray="5 4" />
+                </svg>
                 <span className="font-semibold text-[#D4A017]">SMA-10</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <span className="w-2 h-2.5 bg-indigo-500/60 inline-block" />
-                <span className="font-semibold theme-text-muted">Volume</span>
-              </div>
+              </span>
             </div>
 
-            <div className="flex theme-bg-card p-1 rounded-[4px] border theme-border self-start sm:self-auto">
-              {['1D', '1W', '1M'].map((tf) => (
+            <div className="flex self-start rounded-[6px] border theme-border theme-bg-card p-1 sm:self-auto">
+              {FRAMES.map((f) => (
                 <button
-                  key={tf}
-                  onClick={() => setTimeframe(tf)}
-                  className={`px-3 py-1 text-xs font-bold font-mono rounded-[3px] transition-all min-h-[30px] ${
-                    timeframe === tf
+                  key={f.id}
+                  type="button"
+                  onClick={() => setTimeframe(f.id)}
+                  className={`min-h-[30px] rounded-[4px] px-3 py-1 font-mono text-[11px] font-bold transition-all ${
+                    timeframe === f.id
                       ? 'bg-[#D4A017] text-slate-950 shadow-sm'
                       : 'theme-text-muted hover:theme-text-main'
                   }`}
                 >
-                  {tf}
+                  {f.label}
                 </button>
               ))}
             </div>
           </div>
 
-          <div className="h-52 flex items-center justify-center pt-2">
-            <Sparkline
-              history={activeHistory}
-              width={650}
-              height={190}
-              showSMA={true}
-              showVolume={true}
-            />
+          <div className="mt-3">
+            {loadingHistory && !windowFigures ? (
+              <div className="flex h-[248px] items-center justify-center rounded-[6px] border theme-border theme-bg-card">
+                <span className="font-mono text-[11px] theme-text-dim">Loading the tape…</span>
+              </div>
+            ) : (
+              <DetailChart
+                ticks={windowTicks}
+                height={248}
+                showSMA
+                accent={isPositive ? '#1DB954' : '#E8453C'}
+              />
+            )}
+          </div>
+
+          <div className="mt-2 flex items-center justify-between font-mono text-[10px] theme-text-dim">
+            <span>{windowFigures ? `${windowFigures.count} prints in view` : 'No prints in view'}</span>
+            <span>
+              Window move{' '}
+              <b className={windowChange >= 0 ? 'text-[#1DB954]' : 'text-[#E8453C]'}>
+                {windowChange >= 0 ? '+' : ''}{windowChange.toFixed(2)}%
+              </b>
+            </span>
           </div>
         </div>
+
+        {/* Figures, all measured over exactly the window drawn above */}
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <div className="sdm-stat">
+            <div className="sdm-stat-label">
+              <TrendingUp className="h-3 w-3 text-[#1DB954]" />
+              <span>{frame.label} High</span>
+            </div>
+            <div className="sdm-stat-value text-[#1DB954]">{windowHigh.toFixed(2)} IC</div>
+          </div>
+          <div className="sdm-stat">
+            <div className="sdm-stat-label">
+              <TrendingDown className="h-3 w-3 text-[#E8453C]" />
+              <span>{frame.label} Low</span>
+            </div>
+            <div className="sdm-stat-value text-[#E8453C]">{windowLow.toFixed(2)} IC</div>
+          </div>
+          <div className="sdm-stat">
+            <div className="sdm-stat-label">
+              <Activity className="h-3 w-3 text-[#D4A017]" />
+              <span>SMA-10</span>
+            </div>
+            <div className="sdm-stat-value text-[#D4A017]">
+              {latestSMA != null ? `${latestSMA.toFixed(2)} IC` : '—'}
+            </div>
+          </div>
+          <div className="sdm-stat">
+            <div className="sdm-stat-label">
+              <BarChart2 className="h-3 w-3 text-indigo-400" />
+              <span>{frame.label} Volume</span>
+            </div>
+            <div className="sdm-stat-value text-indigo-300">{compactVolume(windowVolume)} shrs</div>
+          </div>
+        </div>
+
+        </div>
+
+        {/* ---- Right: the ticket ---- */}
+        <div className="space-y-4">
 
         {/* Trade Order Panel */}
         <div className="theme-bg-panel p-5 rounded-[6px] border theme-border space-y-4">
@@ -508,8 +637,10 @@ export function StockDetailModal({ stock, userWallet, userHolding, isOpen, onClo
               </p>
             )}
 
-            <button
+            <motion.button
               type="submit"
+              whileTap={{ scale: 0.975 }}
+              transition={{ type: 'spring', stiffness: 600, damping: 30 }}
               disabled={isTradingLocked || loadingTrade || (
                 tradeCategory === 'INSTANT'
                   ? (mode === 'BUY' ? !canInstantBuy : !canInstantSell)
@@ -539,7 +670,7 @@ export function StockDetailModal({ stock, userWallet, userHolding, isOpen, onClo
                   </span>
                 </>
               )}
-            </button>
+            </motion.button>
           </form>
         </div>
 
@@ -584,6 +715,8 @@ export function StockDetailModal({ stock, userWallet, userHolding, isOpen, onClo
           </div>
         )}
 
+        </div>
+        </div>
         </div>
 
       </div>
