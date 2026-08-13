@@ -8,7 +8,6 @@ require('dotenv').config();
 const { initSocket } = require('./socket');
 const { startMarketTicker } = require('./services/marketTicker');
 const { ensureNewsTemplatesSeeded } = require('./services/newsService');
-const { ensureDatabase } = require('./db/ensureDatabase');
 
 // Top-level process safety nets to prevent backend crashes on stray errors
 process.on('uncaughtException', (err) => {
@@ -51,6 +50,12 @@ app.use(express.json());
 // Socket.io initialization
 initSocket(server);
 
+// Start continuous background market drift ticker
+startMarketTicker();
+
+// Ensure analyst news templates are populated
+ensureNewsTemplatesSeeded();
+
 // API Routes
 app.use('/auth', authRoutes);
 app.use('/stocks', stockRoutes);
@@ -79,32 +84,10 @@ if (fs.existsSync(distPath)) {
 
 const PORT = process.env.PORT || 5001;
 
-/**
- * The ticker writes on every beat, so the database has to be up before it
- * starts — otherwise the log fills with connection errors while the server
- * claims to be running.
- */
-async function boot() {
-  try {
-    await ensureDatabase();
-  } catch (err) {
-    console.error('❌ Could not prepare the database:', err.message);
-    process.exit(1);
-  }
-
-  // Start continuous background market drift ticker
-  startMarketTicker();
-
-  // Ensure analyst news templates are populated
-  ensureNewsTemplatesSeeded();
-
+if (require.main === module) {
   server.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
   });
-}
-
-if (require.main === module) {
-  boot();
 }
 
 module.exports = { app, server };

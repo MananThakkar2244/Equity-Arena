@@ -4,6 +4,3 @@ node_modules/
 !.env.example
 .DS_Store
 *.log
-
-# Local Postgres cluster started by src/db/ensureDatabase.js
-.pgdata/
