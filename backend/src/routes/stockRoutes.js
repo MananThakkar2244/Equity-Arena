@@ -3,6 +3,7 @@ const { PrismaClient } = require('@prisma/client');
 const { authenticateToken } = require('../middleware/authMiddleware');
 
 const router = express.Router();
+const newsRouter = express.Router();
 const prisma = new PrismaClient();
 
 /**
@@ -133,7 +134,11 @@ router.get('/:id/history', async (req, res) => {
 });
 
 // GET /news (Dedicated News Broadcast History for Traders)
-router.get('/news', authenticateToken, async (req, res) => {
+// Registered on a separate router (mounted at '/' in index.js) so that
+// exposing this one route at the site root doesn't also re-expose this
+// router's other routes (GET /, GET /:id/history) at '/', which would
+// shadow the SPA's home page.
+newsRouter.get('/news', authenticateToken, async (req, res) => {
   try {
     const newsList = await prisma.news.findMany({
       orderBy: { timestamp: 'desc' },
@@ -153,3 +158,4 @@ router.get('/news', authenticateToken, async (req, res) => {
 });
 
 module.exports = router;
+module.exports.newsRouter = newsRouter;

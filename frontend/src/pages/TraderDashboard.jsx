@@ -316,29 +316,91 @@ export function TraderDashboard() {
       const qtyOf = (book, symbol) =>
         (book?.holdings || []).find((h) => h.symbol === symbol)?.quantity ?? 0;
 
-      // A fill carries a symbol, a quantity and a price. Anything without all
-      // three — a booked limit order, a cancellation — is a notice, not a fill.
       const isFill = Boolean(fill?.symbol) && Number(fill?.quantity) > 0 && Number.isFinite(Number(fill?.price));
 
       if (isFill) {
-        const before = portfolioRef.current || {};
-        const after = updatedPortfolio ? { ...before, ...updatedPortfolio } : before;
+        const before = portfolioRef.current || EMPTY_PORTFOLIO;
+        const serverWallet = Number(fill.walletBalance);
+        const walletAfter = Number.isFinite(serverWallet)
+          ? serverWallet
+          : Number(before.walletBalance || 0);
+        const quantityAfter = Number.isFinite(Number(fill.holdingQuantity))
+          ? Number(fill.holdingQuantity)
+          : qtyOf(before, fill.symbol);
         const price = Number(fill.price);
         const quantity = Number(fill.quantity);
+        const lockedFunds = Number(before.lockedFunds || 0);
+        const holdingBefore = (before.holdings || []).find((h) => h.symbol === fill.symbol);
+        const stock = stocks.find((s) => s.id === fill.stockId || s.symbol === fill.symbol);
+        const transaction = fill.transaction;
+
+        // Apply the committed fill to the local portfolio immediately. The
+        // server's full portfolio snapshot arrives over Socket.IO afterwards.
+        // This keeps the UI responsive even when the database is remote.
+        const nextHolding = quantityAfter > 0
+          ? {
+              ...(holdingBefore || {}),
+              id: fill.holdingId || holdingBefore?.id || `optimistic-${fill.stockId || fill.symbol}`,
+              stockId: fill.stockId || holdingBefore?.stockId,
+              symbol: fill.symbol,
+              name: fill.name || holdingBefore?.name || stock?.name || fill.symbol,
+              sector: fill.sector || holdingBefore?.sector || stock?.sector,
+              quantity: quantityAfter,
+              lockedQuantity: holdingBefore?.lockedQuantity || 0,
+              availableQuantity: Math.max(0, quantityAfter - (holdingBefore?.lockedQuantity || 0)),
+              avgBuyPrice: Number.isFinite(Number(fill.avgBuyPrice))
+                ? Number(fill.avgBuyPrice)
+                : Number(holdingBefore?.avgBuyPrice || price),
+              currentPrice: stock?.currentPrice || holdingBefore?.currentPrice || price
+            }
+          : null;
+
+        const nextHoldings = (before.holdings || [])
+          .filter((h) => h.symbol !== fill.symbol)
+          .concat(nextHolding ? [nextHolding] : []);
+
+        const pricedHoldings = nextHoldings.map((h) => {
+          const live = stocks.find((s) => s.id === h.stockId || s.symbol === h.symbol);
+          const spot = live?.currentPrice ?? h.currentPrice ?? 0;
+          const totalValue = spot * (h.quantity || 0);
+          const totalCost = (h.avgBuyPrice || 0) * (h.quantity || 0);
+          return {
+            ...h,
+            currentPrice: spot,
+            totalValue,
+            unrealizedPL: totalValue - totalCost,
+            unrealizedPLPercent: totalCost > 0 ? ((totalValue - totalCost) / totalCost) * 100 : 0
+          };
+        });
+
+        const totalHoldingsValue = pricedHoldings.reduce((sum, h) => sum + (h.totalValue || 0), 0);
+        const totalHoldingsCost = pricedHoldings.reduce((sum, h) => sum + ((h.avgBuyPrice || 0) * (h.quantity || 0)), 0);
+
+        setPortfolio((prev) => ({
+          ...prev,
+          walletBalance: walletAfter,
+          availableWalletBalance: Math.max(0, walletAfter - lockedFunds),
+          holdings: pricedHoldings,
+          totalHoldingsValue,
+          totalHoldingsCost,
+          totalUnrealizedPL: totalHoldingsValue - totalHoldingsCost,
+          totalPortfolioValue: walletAfter + totalHoldingsValue,
+          transactions: transaction
+            ? [transaction, ...(prev.transactions || [])].slice(0, 20)
+            : prev.transactions
+        }));
 
         setOrderFill({
-          // Unique per fill, so a second trade replaces the card rather than
-          // stacking a duplicate on top of it.
           id: `${fill.symbol}-${Date.now()}`,
           type: fill.side === 'SELL' ? 'sell' : 'buy',
           symbol: fill.symbol,
           quantity,
           executionPrice: price,
           total: Math.round(quantity * price * 100) / 100,
-          cashBefore: Number(before.walletBalance),
-          cashAfter: Number(after.walletBalance),
+          cashBefore: Number(before.walletBalance || 0),
+          cashAfter: walletAfter,
           sharesBefore: qtyOf(before, fill.symbol),
-          sharesAfter: qtyOf(after, fill.symbol)
+          sharesAfter: quantityAfter
         });
       } else if (message) {
         setNotice({ status: 'success', message });
@@ -347,10 +409,12 @@ export function TraderDashboard() {
       if (updatedPortfolio) {
         setPortfolio((prev) => ({ ...prev, ...updatedPortfolio }));
       }
-      // Always re-sync: the instant response omits transactions/pendingOrders
+
+      // Reconcile silently in the background. This is no longer part of the
+      // perceived trade latency — the committed trade is already on screen.
       fetchPortfolio();
     },
-    [fetchPortfolio]
+    [fetchPortfolio, stocks]
   );
 
   const handleCancelOrder = useCallback(

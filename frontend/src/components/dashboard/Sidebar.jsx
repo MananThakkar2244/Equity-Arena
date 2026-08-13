@@ -21,7 +21,10 @@ export function Sidebar({ active, onChange, badges = {}, isConnected }) {
         style={{ backgroundColor: 'var(--bg-panel)' }}
       >
         <div className="flex items-center gap-2.5 px-5 py-5">
-          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-[#F2C14E] to-[#B07C0C] text-[var(--accent-ink)]">
+          <div
+            className="flex h-9 w-9 items-center justify-center rounded-xl border border-[var(--accent)]/25 text-[var(--accent)]"
+            style={{ backgroundColor: 'var(--accent-soft)' }}
+          >
             <TrendingUp className="h-5 w-5" strokeWidth={2.6} />
           </div>
           <div className="leading-tight">
@@ -30,7 +33,7 @@ export function Sidebar({ active, onChange, badges = {}, isConnected }) {
           </div>
         </div>
 
-        <nav className="mt-2 flex-1 px-3">
+        <nav className="mt-3 flex-1 px-3" aria-label="Primary navigation">
           {SECTIONS.map((s) => {
             const Icon = s.icon;
             const isActive = active === s.id;
@@ -41,17 +44,12 @@ export function Sidebar({ active, onChange, badges = {}, isConnected }) {
                 type="button"
                 onClick={() => onChange(s.id)}
                 aria-current={isActive ? 'page' : undefined}
-                className={`group relative mb-1 flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-[14px] font-medium transition ${
-                  isActive
-                    ? 'bg-[var(--accent-soft)] text-[var(--accent)]'
-                    : 'theme-text-muted hover:bg-[var(--bg-card-hover)] hover:theme-text-main'
+                className={`arena-sidebar-item group relative flex w-full items-center gap-3 rounded-xl px-3.5 py-3 text-left text-[14px] font-medium transition ${
+                  isActive ? 'arena-sidebar-item-active' : 'theme-text-muted'
                 }`}
               >
-                {isActive && (
-                  <span className="arena-pill absolute left-0 top-1/2 h-6 w-[3px] -translate-y-1/2 rounded-r-full bg-[var(--accent)]" />
-                )}
-                <Icon className="h-[18px] w-[18px]" />
-                {s.label}
+                <Icon className="h-[18px] w-[18px] shrink-0" />
+                <span className="truncate">{s.label}</span>
                 {badge ? (
                   <span className="ml-auto rounded-full bg-[var(--accent)] px-1.5 py-0.5 font-mono text-[10px] font-bold text-[var(--accent-ink)]">
                     {badge > 9 ? '9+' : badge}
@@ -97,8 +95,11 @@ export function Sidebar({ active, onChange, badges = {}, isConnected }) {
               key={s.id}
               type="button"
               onClick={() => onChange(s.id)}
-              className={`relative flex flex-1 flex-col items-center gap-0.5 py-2.5 text-[10px] font-semibold transition ${
-                isActive ? 'text-[var(--accent)]' : 'theme-text-dim'
+              aria-current={isActive ? 'page' : undefined}
+              className={`relative flex min-h-[58px] flex-1 flex-col items-center justify-center gap-0.5 border-t-2 px-1 py-2 text-[10px] font-semibold transition ${
+                isActive
+                  ? 'border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]'
+                  : 'border-transparent theme-text-dim hover:bg-[var(--bg-card-hover)] hover:theme-text-main'
               }`}
             >
               <Icon className="h-[18px] w-[18px]" />

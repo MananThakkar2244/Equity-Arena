@@ -20,6 +20,7 @@ process.on('unhandledRejection', (reason, promise) => {
 
 const authRoutes = require('./routes/authRoutes');
 const stockRoutes = require('./routes/stockRoutes');
+const { newsRouter } = require('./routes/stockRoutes');
 const { router: tradeRoutes } = require('./routes/tradeRoutes');
 const adminRoutes = require('./routes/adminRoutes');
 const orderRoutes = require('./routes/orderRoutes');
@@ -63,7 +64,7 @@ app.use('/admin', adminRoutes);
 app.use('/', tradeRoutes); // Mounts GET /portfolio, POST /trade/buy, POST /trade/sell
 app.use('/', orderRoutes); // Mounts POST /orders, DELETE /orders/:id, GET /orders
 app.use('/api', orderRoutes); // Dual mount for /api/orders prefix compatibility
-app.use('/', stockRoutes); // Mounts GET /news
+app.use('/', newsRouter); // Mounts only GET /news at the root
 app.use('/', sessionRoutes); // Mounts GET /api/session, POST /api/admin/session/start
 
 // Health check endpoint

@@ -39,7 +39,11 @@ export function TradeModal({ stock, userWallet, userHolding, isOpen, onClose, on
       });
 
       if (onSuccess) {
-        onSuccess(data.message, data.portfolio);
+        // Pass along the fill data (data.trade) so callers like
+        // TraderDashboard's handleTradeSuccess can apply the optimistic
+        // portfolio update / fill animation instead of only showing a
+        // generic success toast.
+        onSuccess(data.message, data.portfolio, data.trade);
       }
       onClose();
     } catch (err) {

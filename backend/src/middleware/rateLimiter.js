@@ -36,7 +36,13 @@ function adminLoginRateLimiter(req, res, next) {
 
   let record = adminLoginAttempts.get(ip);
   if (!record || now - record.startTime > windowMs) {
+    // Window expired (or first request from this IP): persist the reset
+    // record immediately so recordAdminFailedAttempt() below reads the new
+    // startTime instead of the stale one. Without this write, the map's
+    // startTime is frozen forever at the first window's start, so every
+    // future request looks "expired" and the limiter never blocks again.
     record = { failedCount: 0, startTime: now };
+    adminLoginAttempts.set(ip, record);
   }
 
   if (record.failedCount >= maxFailedAttempts) {

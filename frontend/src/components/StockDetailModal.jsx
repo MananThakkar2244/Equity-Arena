@@ -268,9 +268,25 @@ export function StockDetailModal({ stock, userWallet, userHolding, isOpen, initi
           const filled = data.transaction || {};
           onSuccess(data.message, data.portfolio, {
             side: mode,
+            stockId: stock.id,
             symbol: stock.symbol,
-            quantity: Number(filled.quantity) || parsedQty,
-            price: Number.isFinite(Number(filled.price)) ? Number(filled.price) : stock.currentPrice
+            name: stock.name,
+            sector: stock.sector,
+            quantity: Number(data.trade?.quantity ?? filled.quantity) || parsedQty,
+            price: Number.isFinite(Number(data.trade?.price ?? filled.price))
+              ? Number(data.trade?.price ?? filled.price)
+              : stock.currentPrice,
+            walletBalance: Number.isFinite(Number(data.trade?.walletBalance))
+              ? Number(data.trade.walletBalance)
+              : undefined,
+            holdingId: data.trade?.holdingId || null,
+            holdingQuantity: Number.isFinite(Number(data.trade?.holdingQuantity))
+              ? Number(data.trade.holdingQuantity)
+              : undefined,
+            avgBuyPrice: Number.isFinite(Number(data.trade?.avgBuyPrice))
+              ? Number(data.trade.avgBuyPrice)
+              : undefined,
+            transaction: data.transaction || null
           });
         }
         fetchOrders();

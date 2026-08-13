@@ -7,26 +7,29 @@ const prisma = new PrismaClient();
  * Calculates user's available wallet balance after reserving funds for PENDING BUY limit orders.
  */
 async function getUserAvailableBalance(userId) {
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
-    select: { walletBalance: true }
-  });
+  // These reads are independent. Run them in parallel so every instant trade
+  // pays for one round-trip instead of two sequential database waits.
+  const [user, pendingBuyOrders] = await Promise.all([
+    prisma.user.findUnique({
+      where: { id: userId },
+      select: { walletBalance: true }
+    }),
+    prisma.order.findMany({
+      where: {
+        userId,
+        type: 'BUY',
+        status: 'PENDING'
+      },
+      select: {
+        targetPrice: true,
+        quantity: true
+      }
+    })
+  ]);
 
   if (!user) {
     throw new Error('User not found');
   }
-
-  const pendingBuyOrders = await prisma.order.findMany({
-    where: {
-      userId,
-      type: 'BUY',
-      status: 'PENDING'
-    },
-    select: {
-      targetPrice: true,
-      quantity: true
-    }
-  });
 
   const lockedFunds = Math.round(pendingBuyOrders.reduce((sum, order) => {
     return sum + (order.targetPrice * order.quantity);
