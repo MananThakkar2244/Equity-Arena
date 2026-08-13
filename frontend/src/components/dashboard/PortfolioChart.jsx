@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useId, useMemo, useRef, useState } from 'react';
 
 const VW = 1000;
 const VH = 320;
@@ -25,6 +25,7 @@ const compact = (n) => {
  * min/max, so a quiet stretch does not get magnified into fake volatility.
  */
 export function PortfolioChart({ points = [], openValue = null, height = 300 }) {
+  const uid = useId().replace(/:/g, '');
   const wrapRef = useRef(null);
   const [hover, setHover] = useState(null);
 
@@ -97,7 +98,7 @@ export function PortfolioChart({ points = [], openValue = null, height = 300 }) 
 
   const up = geom.last.value >= (openValue ?? geom.coords[0].value);
   const stroke = up ? 'var(--gain-green, #22c55e)' : 'var(--loss-red, #ef4444)';
-  const gid = up ? 'pf-fill-up' : 'pf-fill-down';
+  const gid = `pf-${uid}-${up ? 'fill-up' : 'fill-down'}`;
 
   const onMove = (event) => {
     const box = wrapRef.current?.getBoundingClientRect();
@@ -132,12 +133,12 @@ export function PortfolioChart({ points = [], openValue = null, height = 300 }) 
         className="h-full w-full overflow-visible"
       >
         <defs>
-          <linearGradient id="pf-fill-up" x1="0" y1="0" x2="0" y2="1">
+          <linearGradient id={`pf-${uid}-fill-up`} x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%" stopColor="#3b82f6" stopOpacity="0.42" />
             <stop offset="55%" stopColor="#3b82f6" stopOpacity="0.12" />
             <stop offset="100%" stopColor="#3b82f6" stopOpacity="0" />
           </linearGradient>
-          <linearGradient id="pf-fill-down" x1="0" y1="0" x2="0" y2="1">
+          <linearGradient id={`pf-${uid}-fill-down`} x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%" stopColor="#ef4444" stopOpacity="0.34" />
             <stop offset="60%" stopColor="#ef4444" stopOpacity="0.08" />
             <stop offset="100%" stopColor="#ef4444" stopOpacity="0" />

@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useId, useMemo, useRef, useState } from 'react';
 
 const W = 600;
 const H = 220;
@@ -48,7 +48,8 @@ export function AreaChart({ series = [], positive = true, label = '', height = 2
   }, [series]);
 
   const stroke = positive ? '#1DB954' : '#E8453C';
-  const gradId = positive ? 'arena-area-up' : 'arena-area-down';
+  const uid = useId().replace(/:/g, '');
+  const gradId = `arena-area-${uid}-${positive ? 'up' : 'down'}`;
 
   const handleMove = (e) => {
     if (!coords.length || !wrapRef.current) return;

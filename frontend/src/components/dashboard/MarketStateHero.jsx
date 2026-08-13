@@ -23,7 +23,7 @@ export function MarketStateHero({
   // Feed the machine its own previous state. Passing a literal 'NEUTRAL' threw
   // the hysteresis away, so a score sitting on a threshold re-decided from
   // scratch every tick instead of holding.
-  const [state, setState] = useState('NEUTRAL');
+  const [state, setState] = useState(() => nextMarketState('NEUTRAL', read.score));
   useEffect(() => {
     setState((prev) => nextMarketState(prev, read.score));
   }, [read.score]);
@@ -70,6 +70,26 @@ export function MarketStateHero({
       : score < 0
         ? `${score}`
         : '0';
+
+  const moverSummary = useMemo(() => {
+    const clean = (Array.isArray(stocks) ? stocks : []).filter(
+      (stock) => stock && Number.isFinite(Number(stock.percentChange))
+    );
+    const bullish = clean
+      .filter((stock) => Number(stock.percentChange) > 0)
+      .sort((a, b) => Number(b.percentChange) - Number(a.percentChange));
+    const bearish = clean
+      .filter((stock) => Number(stock.percentChange) < 0)
+      .sort((a, b) => Number(a.percentChange) - Number(b.percentChange));
+    const average = (list) =>
+      list.length ? list.reduce((sum, stock) => sum + Number(stock.percentChange), 0) / list.length : 0;
+    return {
+      bullish: bullish.slice(0, 3),
+      bearish: bearish.slice(0, 3),
+      bullishAvg: average(bullish),
+      bearishAvg: average(bearish),
+    };
+  }, [stocks]);
 
   return (
     <section
@@ -175,6 +195,9 @@ export function MarketStateHero({
             side="bull"
             percentage={read.advPct}
             count={read.advancing}
+            total={total}
+            averageChange={moverSummary.bullishAvg}
+            leaders={moverSummary.bullish}
             label="Advancing Listings"
           />
 
@@ -333,6 +356,9 @@ export function MarketStateHero({
             side="bear"
             percentage={read.decPct}
             count={read.declining}
+            total={total}
+            averageChange={moverSummary.bearishAvg}
+            leaders={moverSummary.bearish}
             label="Declining Listings"
           />
 
@@ -374,6 +400,9 @@ function MarketForceCard({
   side,
   percentage = 0,
   count = 0,
+  total = 0,
+  averageChange = 0,
+  leaders = [],
   label,
 }) {
   const isBull = side === 'bull';
@@ -389,6 +418,10 @@ function MarketForceCard({
   const title = isBull
     ? 'Bullish Force'
     : 'Bearish Pressure';
+  const sideCount = Number(count) || 0;
+  const totalCount = Number(total) || 0;
+  const share = totalCount > 0 ? (sideCount / totalCount) * 100 : 0;
+  const avgMove = Number(averageChange) || 0;
 
   return (
     <motion.div
@@ -402,7 +435,7 @@ function MarketForceCard({
       className={`
         relative isolate flex h-full flex-col justify-between overflow-hidden
         rounded-xl border
-        p-4
+        p-4 sm:p-5 min-h-[300px]
         ${
           isBull
             ? 'lg:col-span-4 border-[rgba(34,197,94,0.18)]'
@@ -457,9 +490,62 @@ function MarketForceCard({
 
       </div>
 
+      {/* Side strength + top movers */}
+
+      <div className="relative z-10 mt-4 space-y-3">
+        <div className="flex items-center justify-between font-mono text-[8px] uppercase tracking-[0.16em] theme-text-dim">
+          <span>Board breadth</span>
+          <span className="theme-text-muted">{sideCount}/{totalCount || 0} · {Math.round(share)}%</span>
+        </div>
+
+        <div className="h-2 overflow-hidden rounded-full bg-[var(--bg-panel)]">
+          <motion.div
+            className="h-full rounded-full"
+            style={{ backgroundColor: color }}
+            animate={{ width: `${Math.min(100, Math.max(0, share))}%` }}
+            transition={{ duration: 0.65, ease: 'easeOut' }}
+          />
+        </div>
+
+        <div className="grid grid-cols-2 gap-2">
+          <div className="rounded-lg border theme-border bg-[var(--bg-panel)]/70 px-2.5 py-2">
+            <div className="font-mono text-[8px] uppercase tracking-wider theme-text-dim">Avg move</div>
+            <div className="mt-1 font-mono text-[12px] font-bold" style={{ color }}>
+              {avgMove > 0 ? '+' : ''}{avgMove.toFixed(2)}%
+            </div>
+          </div>
+          <div className="rounded-lg border theme-border bg-[var(--bg-panel)]/70 px-2.5 py-2">
+            <div className="font-mono text-[8px] uppercase tracking-wider theme-text-dim">Top movers</div>
+            <div className="mt-1 font-heading text-[12px] font-bold theme-text-main">{leaders.length || 0}</div>
+          </div>
+        </div>
+
+        <div>
+          <div className="mb-1.5 font-mono text-[8px] uppercase tracking-[0.16em] theme-text-dim">Leading listings</div>
+          <div className="space-y-1.5">
+            {leaders.length ? leaders.map((stock, i) => {
+              const move = Number(stock.percentChange) || 0;
+              return (
+                <div key={`${side}-${stock.id || stock.symbol || i}`} className="flex items-center justify-between gap-3 rounded-lg border theme-border bg-[var(--bg-panel)]/45 px-2.5 py-1.5">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span className="font-mono text-[8px] font-bold" style={{ color }}>{i + 1}</span>
+                    <span className="truncate font-heading text-[10.5px] font-bold theme-text-main">{stock.symbol || '—'}</span>
+                  </div>
+                  <span className="shrink-0 font-mono text-[9.5px] font-bold" style={{ color }}>
+                    {move > 0 ? '+' : ''}{move.toFixed(2)}%
+                  </span>
+                </div>
+              );
+            }) : (
+              <div className="rounded-lg border border-dashed theme-border px-3 py-2 text-center font-mono text-[8px] uppercase tracking-wider theme-text-dim">No active movers</div>
+            )}
+          </div>
+        </div>
+      </div>
+
       {/* Bottom content */}
 
-      <div className="relative z-10 mt-6 flex items-end justify-between gap-4">
+      <div className="relative z-10 mt-auto pt-4 flex items-end justify-between gap-4">
 
         <div>
 

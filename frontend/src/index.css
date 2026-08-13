@@ -1088,3 +1088,192 @@
     animation: none !important;
   }
 }
+
+/* ============================================================
+   RESPONSIVE EQUITY ARENA
+   Keeps the existing desktop design intact while making the
+   terminal comfortable on tablets and phones.
+   ============================================================ */
+
+html,
+body,
+#root {
+  width: 100%;
+  min-width: 0;
+}
+
+body {
+  overflow-x: hidden;
+}
+
+img,
+svg,
+canvas {
+  max-width: 100%;
+}
+
+button,
+input,
+select {
+  touch-action: manipulation;
+}
+
+@media (max-width: 1023px) {
+  .mkt-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
+
+  .mkt-grid-sm {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .arena-card,
+  .arena-panel {
+    min-width: 0;
+    overflow-x: hidden;
+  }
+
+  .mkt-card,
+  .mkt-body {
+    min-width: 0;
+  }
+
+  .mkt-foot {
+    flex-wrap: wrap;
+    gap: 6px 12px;
+  }
+}
+
+@media (max-width: 639px) {
+  .mkt-grid,
+  .mkt-grid-sm {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .mkt-card-sm {
+    min-height: 150px;
+  }
+
+  .mkt-card-sm .mkt-body {
+    padding: 12px;
+  }
+
+  /* Touch devices have no hover, so Buy/Sell stays visible in-flow. */
+  .mkt-action {
+    position: static !important;
+    left: auto !important;
+    right: auto !important;
+    bottom: auto !important;
+    margin-top: 9px !important;
+    opacity: 1 !important;
+    transform: none !important;
+    pointer-events: auto !important;
+  }
+
+  .mkt-card:hover .mkt-foot {
+    opacity: 1 !important;
+  }
+
+  .mkt-sides,
+  .mkt-sides-block {
+    width: 100%;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 7px;
+  }
+
+  .mkt-side {
+    width: 100%;
+    min-height: 38px;
+    padding: 9px 8px;
+    font-size: 10px;
+  }
+
+  .mkt-seg {
+    max-width: 100%;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .mkt-seg::-webkit-scrollbar {
+    display: none;
+  }
+
+  .mkt-seg button {
+    min-height: 36px;
+    padding-inline: 11px;
+  }
+
+  .mkt-select select {
+    min-height: 36px;
+    max-width: 100%;
+  }
+
+  .arena-card {
+    border-radius: 12px;
+  }
+
+  .arena-card > .mb-4.flex.flex-wrap {
+    align-items: stretch;
+  }
+
+  .arena-card select {
+    max-width: 100%;
+  }
+
+  table {
+    min-width: 620px;
+  }
+
+  .overflow-x-auto {
+    max-width: 100%;
+    -webkit-overflow-scrolling: touch;
+  }
+}
+
+@media (max-width: 420px) {
+  .mkt-grid,
+  .mkt-grid-sm {
+    gap: 8px;
+  }
+
+  .mkt-card-sm {
+    min-height: 142px;
+  }
+
+  .mkt-seg button {
+    padding-inline: 9px;
+    font-size: 11px;
+  }
+
+  header .ml-auto.flex.flex-wrap.items-center {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  header .ml-auto.flex.flex-wrap.items-center > :first-child {
+    flex: 1 1 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mkt-card,
+  .mkt-row,
+  .mkt-more {
+    transition: none !important;
+  }
+}
+
+
+/* Frontend polish / bug fixes */
+@media (max-width: 767px) {
+  .mkt-card, .mkt-card .mkt-body { min-width: 0; }
+  .mkt-card-sm .mkt-action { margin-top: 10px !important; }
+  .mkt-card-sm .mkt-side { min-width: 0; }
+}
+@media (hover: hover) and (pointer: fine) { .mkt-card:hover { z-index: 4; } }
+button:disabled, [aria-disabled="true"] { cursor: not-allowed; }
+input, select, textarea { min-width: 0; }
+*:focus-visible { outline: 2px solid var(--accent, #3b82f6); outline-offset: 2px; }

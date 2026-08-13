@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
 
 /**
  * Price chart at per-pixel resolution.
@@ -61,6 +61,8 @@ const hhmm = (ts) => {
 };
 
 export function TradingChart({ ticks = [], symbol = '', height = 430 }) {
+  const uid = useId().replace(/:/g, '');
+  const fillId = `trading-chart-${uid}-fill`;
   const wrapRef = useRef(null);
   const [width, setWidth] = useState(900);
   const [hover, setHover] = useState(null);
@@ -77,8 +79,14 @@ export function TradingChart({ ticks = [], symbol = '', height = 430 }) {
     return () => ro.disconnect();
   }, []);
 
+  // Cap the chart height on smaller viewports so it stays usable on phones.
+  const chartHeight = Math.min(
+    height,
+    width < 420 ? 270 : width < 640 ? 300 : width < 900 ? 350 : height
+  );
+
   const plotW = Math.max(60, width - PAD.left - PAD.right);
-  const plotH = Math.max(80, height - PAD.top - PAD.bottom);
+  const plotH = Math.max(80, chartHeight - PAD.top - PAD.bottom);
 
   const clean = useMemo(() => (ticks || []).filter((t) => Number.isFinite(t?.price)), [ticks]);
   const series = useMemo(() => toLineSamples(clean, Math.floor(plotW)), [clean, plotW]);
@@ -120,7 +128,7 @@ export function TradingChart({ ticks = [], symbol = '', height = 430 }) {
 
   if (!n || !scale) {
     return (
-      <div ref={wrapRef} className="arena-shimmer flex items-center justify-center rounded-xl" style={{ height }}>
+      <div ref={wrapRef} className="arena-shimmer flex items-center justify-center rounded-xl" style={{ height: chartHeight }}>
         <span className="font-mono text-[11px] theme-text-dim">Collecting ticks…</span>
       </div>
     );
@@ -172,13 +180,13 @@ export function TradingChart({ ticks = [], symbol = '', height = 430 }) {
       <div
         ref={wrapRef}
         className="relative w-full select-none"
-        style={{ height, cursor: 'crosshair' }}
+        style={{ height: chartHeight, cursor: 'crosshair' }}
         onMouseMove={handleMove}
         onMouseLeave={() => setHover(null)}
       >
-        <svg width={width} height={height} className="block">
+        <svg width={width} height={chartHeight} className="block">
           <defs>
-            <linearGradient id="tc-fill" x1="0" y1="0" x2="0" y2="1">
+            <linearGradient id={fillId} x1="0" y1="0" x2="0" y2="1">
               <stop offset="0%" stopColor={trendColour} stopOpacity="0.30" />
               <stop offset="100%" stopColor={trendColour} stopOpacity="0" />
             </linearGradient>
@@ -229,7 +237,7 @@ export function TradingChart({ ticks = [], symbol = '', height = 430 }) {
           })}
 
           {/* Series */}
-          <path d={linePath.fill} fill="url(#tc-fill)" />
+          <path d={linePath.fill} fill={`url(#${fillId})`} />
           <path
             d={linePath.stroke}
             fill="none"
@@ -276,7 +284,7 @@ export function TradingChart({ ticks = [], symbol = '', height = 430 }) {
               <text
                 key={`t${k}`}
                 x={scale.x(i)}
-                y={height - 14}
+                y={chartHeight - 14}
                 textAnchor="middle"
                 className="theme-text-dim"
                 fill="currentColor"
@@ -330,7 +338,7 @@ export function TradingChart({ ticks = [], symbol = '', height = 430 }) {
               <rect x={hoverX - 26} y={height - 26} width="52" height="17" rx="4" fill="var(--accent)" />
               <text
                 x={hoverX}
-                y={height - 14}
+                y={chartHeight - 14}
                 textAnchor="middle"
                 fill="#FFFFFF"
                 fontSize="9.5"

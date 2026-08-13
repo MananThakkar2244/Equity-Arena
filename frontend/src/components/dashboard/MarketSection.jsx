@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useId, useMemo, useState } from 'react';
 import { Activity, ArrowDownRight, ArrowRight, ArrowUpRight, ChevronDown, Coins, LayoutGrid, List, Newspaper, Trophy, Wallet } from 'lucide-react';
 import { StatTile } from './StatTile';
 import { TradingChart } from './TradingChart';
@@ -113,6 +113,7 @@ const SPARK_W = 100;
  * than SVG so the non-uniform viewBox scale can't squash it into an ellipse.
  */
 function Sparkline({ prices, positive, height = 38, bare = false }) {
+  const uid = useId().replace(/:/g, '');
   const geom = useMemo(() => {
     if (!prices || prices.length < 2) return null;
     const recent = prices.slice(-60);
@@ -135,7 +136,7 @@ function Sparkline({ prices, positive, height = 38, bare = false }) {
   if (!geom) return <div style={{ height }} className="flex-1" />;
 
   const colour = positive ? 'var(--gain-green)' : 'var(--loss-red)';
-  const gid = positive ? 'spark-fill-up' : 'spark-fill-down';
+  const gid = `market-spark-${uid}-${positive ? 'up' : 'down'}`;
 
   return (
     <div className="relative flex-1" style={{ height, color: colour }}>
@@ -469,10 +470,17 @@ export function MarketSection({
    * only embeds the last 30 ticks per stock, which is too shallow to draw a
    * card's 1H window or to sum the composite index.
    */
-  useEffect(() => {
-    if (!stocks.length) return undefined;
-    let cancelled = false;
+  const stockHistoryKey = useMemo(
+    () => stocks.map((stock) => stock.id).filter(Boolean).join(','),
+    [stocks]
+  );
 
+  useEffect(() => {
+    if (!stocks.length || !stockHistoryKey) {
+      setSessionBySymbol({});
+      return undefined;
+    }
+    let cancelled = false;
     const pull = () =>
       Promise.all(
         stocks.map((s) =>
@@ -483,18 +491,13 @@ export function MarketSection({
       )
         .then((pairs) => !cancelled && setSessionBySymbol(Object.fromEntries(pairs)))
         .catch(() => {});
-
     pull();
     const id = setInterval(pull, DEEP_REFRESH_MS);
-
     return () => {
       cancelled = true;
       clearInterval(id);
     };
-    // Keyed on the listing set, not on focus: re-pulling fifteen sessions every
-    // time somebody picks a different instrument is pure waste. Stock ids are
-    // fixed for a session, so the captured list stays valid between refreshes.
-  }, [stocks.length]);
+  }, [stockHistoryKey, stocks]);
 
   /** The focused instrument gets its own pull so the big chart stays deep. */
   useEffect(() => {

@@ -1,4 +1,4 @@
-import React, { memo } from 'react';
+import React, { memo, useId } from 'react';
 
 /**
  * Calculates a Simple Moving Average (SMA) over a given period (default 10)
@@ -17,6 +17,7 @@ export function calculateSMA(data, period = 10) {
 }
 
 export const Sparkline = memo(({ history = [], width = 120, height = 36, showVolume = false, showSMA = false }) => {
+  const uid = useId().replace(/:/g, '');
   if (!history || history.length < 2) {
     return (
       <div
@@ -74,7 +75,7 @@ export const Sparkline = memo(({ history = [], width = 120, height = 36, showVol
   return (
     <svg width={width} height={height} className="overflow-visible">
       <defs>
-        <linearGradient id={`grad-${isUp ? 'up' : 'down'}`} x1="0" y1="0" x2="0" y2="1">
+        <linearGradient id={`sparkline-${uid}-${isUp ? 'up' : 'down'}`} x1="0" y1="0" x2="0" y2="1">
           <stop offset="0%" stopColor={strokeColor} stopOpacity={0.3} />
           <stop offset="100%" stopColor={strokeColor} stopOpacity={0.0} />
         </linearGradient>
@@ -103,7 +104,7 @@ export const Sparkline = memo(({ history = [], width = 120, height = 36, showVol
         })}
 
       {/* Price Area Fill */}
-      <polygon points={fillPoints} fill={`url(#grad-${isUp ? 'up' : 'down'})`} />
+      <polygon points={fillPoints} fill={`url(#sparkline-${uid}-${isUp ? 'up' : 'down'})`} />
 
       {/* SMA-10 Line (Dashed Amber/Indigo Line) */}
       {showSMA && smaPoints.length > 1 && (
